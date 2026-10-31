@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Register · OpenVMK</title>
+<link rel="preload" href="/site/fonts/fredoka-700.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="/site/site.css">
+</head>
+<body class="auth">
+<header class="topbar">
+  <div class="wrap">
+    <a class="brand" href="/" aria-label="OpenVMK home">Open<span>VMK</span></a>
+    <nav class="account" aria-label="Account"><a href="/">Back to home</a></nav>
+  </div>
+</header>
+
+<main class="auth-main">
+  <nav class="tabs" aria-label="Account">
+    <a class="tab register" href="/register" aria-current="page">Register</a>
+    <a class="tab signin" href="/login<!--nextQuery-->">Sign in</a>
+  </nav>
+
+  <form class="auth-card" method="POST" action="/register">
+    <div>
+      <h1>Join the Kingdom</h1>
+      <p class="lede">It's free. Pick a name for your account; you'll design your avatar the first time you play.</p>
+    </div>
+
+<!--error-->
+<!--next-->
+
+    <div class="field">
+      <label for="reg-user">Username</label>
+      <input id="reg-user" name="username" type="text" autocomplete="username" required maxlength="32"
+             spellcheck="false" autocapitalize="none" value="{{username}}" aria-describedby="reg-user-hint" autofocus>
+      <p id="reg-user-hint" class="hint">Up to 32 characters: letters, numbers, spaces, dot, dash and underscore. You sign in with this; it isn't your avatar's name.</p>
+    </div>
+
+    <div class="field">
+      <label for="reg-pass">Password</label>
+      <input id="reg-pass" name="password" type="password" autocomplete="new-password" required minlength="6" maxlength="128"
+             aria-describedby="reg-pass-hint">
+      <p id="reg-pass-hint" class="hint">At least 6 characters.</p>
+    </div>
+
+    <div class="field">
+      <label for="reg-pass2">Type your password again</label>
+      <input id="reg-pass2" name="password_confirm" type="password" autocomplete="new-password" required minlength="6" maxlength="128">
+    </div>
+
+    <label class="check" for="reg-rules">
+      <input id="reg-rules" name="rules" type="checkbox" value="yes" required>
+      <span>I'll keep VMK friendly: no bullying, no sharing personal details, and I'll listen to staff.</span>
+    </label>
+
+    <button class="btn-play" type="submit">Create my account</button>
+
+    <p class="switch">Already playing? <a href="/login<!--nextQuery-->">Sign in</a></p>
+  </form>
+
+  <aside class="tip" aria-labelledby="safe-h">
+    <div class="icon" aria-hidden="true" style="background:#ADD938"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#0B1F5E" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l8 3v6c0 4.5-3.4 8.2-8 9-4.6-.8-8-4.5-8-9V6z"/><path d="M9 12l2 2 4-4"/></svg></div>
+    <div>
+      <h2 id="safe-h">Keep your account safe</h2>
+      <p>Never share your password, even with staff. Staff will never ask for it.</p>
+    </div>
+  </aside>
+</main>
+
+<footer class="footer">
+  <div class="wrap">
+    <nav aria-label="Footer">
+      <a href="/">Home</a>
+      <a href="https://github.com/OpenVMK/OpenVMK">Source code</a>
+    </nav>
+    <p>OpenVMK is a fan preservation project, not affiliated with The Walt Disney Company.</p>
+  </div>
+</footer>
+</body>
+</html>

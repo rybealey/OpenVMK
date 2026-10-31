@@ -4,6 +4,13 @@ VMK - what's new
 Unreleased
 ----------
 
+  - A website in the style of the 2007 VMK site, built to work on a phone
+    too. The home page shows the news, staff-featured guest rooms and
+    how many players are in the game; signed in, it adds My VMK with your
+    credits, pins, friends online and guest rooms.
+  - Register and Sign in are separate pages. Signing in with a name that
+    has no account is now an error instead of quietly creating a second
+    account, and registering asks for the password twice.
   - The Guard Dog with key animates again: its tail and key wag. Four
     other late items (915, 1351, 1352, 1354) get their animations back
     too.

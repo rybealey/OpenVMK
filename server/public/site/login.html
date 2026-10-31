@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sign in · OpenVMK</title>
+<link rel="preload" href="/site/fonts/fredoka-700.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="/site/site.css">
+</head>
+<body class="auth">
+<header class="topbar">
+  <div class="wrap">
+    <a class="brand" href="/" aria-label="OpenVMK home">Open<span>VMK</span></a>
+    <nav class="account" aria-label="Account"><a href="/">Back to home</a></nav>
+  </div>
+</header>
+
+<main class="auth-main">
+  <nav class="tabs" aria-label="Account">
+    <a class="tab register" href="/register<!--nextQuery-->">Register</a>
+    <a class="tab signin" href="/login" aria-current="page">Sign in</a>
+  </nav>
+
+  <form class="auth-card signin" method="POST" action="/auth">
+    <div>
+      <h1>Welcome back</h1>
+      <p class="lede">Sign in to head back into the Kingdom.</p>
+    </div>
+
+<!--error-->
+<!--next-->
+
+    <div class="field">
+      <label for="log-user">Username</label>
+      <input id="log-user" name="username" type="text" autocomplete="username" required maxlength="32"
+             spellcheck="false" autocapitalize="none" value="{{username}}" autofocus>
+    </div>
+
+    <div class="field">
+      <label for="log-pass">Password</label>
+      <input id="log-pass" name="password" type="password" autocomplete="current-password" required maxlength="128">
+    </div>
+
+    <button class="btn-play" type="submit">Sign in</button>
+
+    <div class="auth-links">
+      <a href="/register<!--nextQuery-->">New here? Register</a>
+    </div>
+  </form>
+
+  <aside class="tip" aria-labelledby="tip-h">
+    <div class="icon" aria-hidden="true" style="background:#FFC21A"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#0B1F5E" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg></div>
+    <div>
+      <h2 id="tip-h">Playing on a shared computer?</h2>
+      <p>Sign out when you're done so the next person can't use your account.</p>
+    </div>
+  </aside>
+</main>
+
+<footer class="footer">
+  <div class="wrap">
+    <nav aria-label="Footer">
+      <a href="/">Home</a>
+      <a href="https://github.com/OpenVMK/OpenVMK">Source code</a>
+    </nav>
+    <p>OpenVMK is a fan preservation project, not affiliated with The Walt Disney Company.</p>
+  </div>
+</footer>
+</body>
+</html>

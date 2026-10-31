@@ -1004,9 +1004,22 @@ export function createUser(username: string, password: string): User {
   return created;
 }
 
+/** Stamp a successful sign-in. */
+export function recordLogin(userId: number): void {
+  db.prepare("UPDATE users SET last_login_at = ? WHERE id = ?").run(now(), userId);
+}
+
+/** When the account was made, ms epoch. */
+export function userCreatedAt(userId: number): number | undefined {
+  const row = db.prepare("SELECT created_at FROM users WHERE id = ?").get(userId) as { created_at?: number } | undefined;
+  return row?.created_at === undefined ? undefined : Number(row.created_at);
+}
+
 /**
- * The login page's whole behaviour: unknown username creates the account,
- * known username verifies the password.
+ * Unknown username creates the account, known username verifies the password.
+ * Only the dev player still signs in this way; the website registers and signs
+ * in separately (auth.ts `register` / `signIn`), so a mistyped name on the sign-in
+ * page cannot quietly make a second account.
  *
  * Returns `undefined` only when the username exists and the password is wrong,
  * so the caller cannot accidentally treat "wrong password" as "new user".
@@ -1025,7 +1038,7 @@ export function loginOrCreate(
   if (!passwordMatches(password, String(existing.password_salt), String(existing.password_hash))) {
     return undefined;
   }
-  db.prepare("UPDATE users SET last_login_at = ? WHERE id = ?").run(now(), Number(existing.id));
+  recordLogin(Number(existing.id));
   return { user: rowToUser(existing), created: false };
 }
 
@@ -1652,6 +1665,14 @@ export function hasValidTicket(userId: number, spaceId: number): boolean {
 
 /** `item.12221` "Single Use Room Ticket" — the pin a room ticket is. */
 export const ROOM_TICKET_CODE = 12221;
+
+/** Pins a player holds. Room tickets share the pin category, so they are left out. */
+export function countPins(ownerId: number): number {
+  const row = db
+    .prepare("SELECT COUNT(*) AS n FROM items WHERE owner_id = ? AND category = ? AND type_code <> ?")
+    .get(ownerId, ITEM_CATEGORY.pins, ROOM_TICKET_CODE) as { n: number };
+  return Number(row.n);
+}
 
 export interface RoomTicket {
   id: number;

@@ -54,16 +54,23 @@ class Jar {
   }
 }
 
-async function login(jar: Jar, username: string, password: string): Promise<number> {
-  const res = await fetch(`${BASE}/auth`, {
+async function post(jar: Jar, path: string, form: Record<string, string>): Promise<number> {
+  const res = await fetch(`${BASE}${path}`, {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded", Cookie: jar.header() },
-    body: new URLSearchParams({ username, password }),
+    body: new URLSearchParams(form),
     redirect: "manual",
   });
   jar.absorb(res);
   return res.status;
 }
+
+/** Sign in to an existing account (POST /auth never creates one). */
+const login = (jar: Jar, username: string, password: string) => post(jar, "/auth", { username, password });
+
+/** Create an account the way the Register page does. */
+const register = (jar: Jar, username: string, password: string) =>
+  post(jar, "/register", { username, password, password_confirm: password, rules: "yes" });
 
 async function getPlay(jar: Jar): Promise<{ status: number; body: string }> {
   const res = await fetch(`${BASE}/play`, {
@@ -89,16 +96,26 @@ const anon = new Jar();
 const anonPlay = await getPlay(anon);
 check("anonymous /play is refused", anonPlay.status === 302, `status ${anonPlay.status}`);
 
+// --- signing in never creates an account -------------------------------------
+const stranger = new Jar();
+const strangerStatus = await login(stranger, `SmokeNobody_${stamp}`, "passwordX");
+check("sign-in with an unknown name is refused", strangerStatus === 401, `status ${strangerStatus}`);
+check("...and sets no session", !stranger.session);
+
 // --- account A ---------------------------------------------------------------
 const jarA = new Jar();
-const statusA = await login(jarA, userA, "passwordA");
-check("new account A logs in", statusA === 302, `status ${statusA}`);
+const statusA = await register(jarA, userA, "passwordA");
+check("new account A registers", statusA === 302, `status ${statusA}`);
 check("account A got a session cookie", !!jarA.session);
+const again = await register(new Jar(), userA.toUpperCase(), "passwordA");
+check("registering A's name again is refused", again === 409, `status ${again}`);
+const signInA = await login(new Jar(), userA, "passwordA");
+check("account A can sign in", signInA === 302, `status ${signInA}`);
 
 // --- account B, entirely separate jar ----------------------------------------
 const jarB = new Jar();
-const statusB = await login(jarB, userB, "passwordB");
-check("new account B logs in", statusB === 302, `status ${statusB}`);
+const statusB = await register(jarB, userB, "passwordB");
+check("new account B registers", statusB === 302, `status ${statusB}`);
 check("account B got a session cookie", !!jarB.session);
 check("A and B have DIFFERENT session tokens", jarA.session !== jarB.session);
 
@@ -124,7 +141,8 @@ const jarBad = new Jar();
 const badStatus = await login(jarBad, userA, "not-A's-password");
 const badPlay = await getPlay(jarBad);
 check("wrong password does not grant a session", badPlay.status === 302, `status ${badPlay.status}`);
-check("wrong password is a redirect, not a 500", badStatus === 302, `status ${badStatus}`);
+// The Sign in page again with its error (401), not a redirect and not a 500.
+check("wrong password is refused, not a 500", badStatus === 401, `status ${badStatus}`);
 
 // --- logout drops the session ------------------------------------------------
 await fetch(`${BASE}/logout`, { headers: { Cookie: jarA.header() }, redirect: "manual" });
