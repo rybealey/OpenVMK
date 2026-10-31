@@ -19,6 +19,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { dictionaryEntries, dictionaryVersion, localChangeCount } from "./dictionary-store.js";
 import { ARCHIVE } from "./paths.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -180,8 +181,10 @@ function findDictionaryFile(): string | null {
 }
 
 let expanded: string[] | null = null;
+let sourceText: string | null = null;
+let recovered: Set<string> | null = null;
 
-/** The expanded list, loaded once. Empty if the dictionary file is missing. */
+/** The RECOVERED list, expanded, loaded once. Empty if the dictionary file is missing. */
 export function expandedWords(): string[] {
   if (expanded) return expanded;
   const source = findDictionaryFile();
@@ -189,8 +192,8 @@ export function expandedWords(): string[] {
     expanded = [];
     return expanded;
   }
-  const text = readFileSync(source, "latin1");
-  const raw = [...text.matchAll(/"((?:[^"\\]|\\.)*)"/g)].map((m) => m[1]);
+  sourceText = readFileSync(source, "latin1");
+  const raw = [...sourceText.matchAll(/"((?:[^"\\]|\\.)*)"/g)].map((m) => m[1]);
   expanded = expandDictionary(raw);
   console.log(
     `[chat] dictionary: ${raw.length} crunched entries -> ${expanded.length} expanded words`,
@@ -198,10 +201,89 @@ export function expandedWords(): string[] {
   return expanded;
 }
 
-/** Resolve a client token index (1-based) to its word, or null. */
+/** Is this word (any case) in the recovered dictionary, in any expanded form? */
+export function inRecoveredDictionary(word: string): boolean {
+  recovered ??= new Set(expandedWords().map((w) => w.toLowerCase()));
+  return recovered.has(word.toLowerCase());
+}
+
+/* ---- staff changes (dictionary-store.ts), layered on the recovered list ---- */
+
+interface Overlay {
+  version: number;
+  checkedAt: number;
+  /** Appended after the recovered list, in this order: index = recovered length + 1 + i. */
+  added: string[];
+  blocked: Set<string>;
+  allowed: Set<string>;
+}
+
+let overlay: Overlay = { version: -1, checkedAt: 0, added: [], blocked: new Set(), allowed: new Set() };
+let seenLocal = 0;
+
+/** The staff changes, re-read when /hk has bumped the version (checked at most once a second). */
+function staffChanges(): Overlay {
+  const now = Date.now();
+  const local = localChangeCount();
+  if (now - overlay.checkedAt < 1000 && local === seenLocal) return overlay;
+  overlay.checkedAt = now;
+  seenLocal = local;
+  const version = dictionaryVersion();
+  if (version === overlay.version) return overlay;
+  const entries = dictionaryEntries();
+  overlay = {
+    version,
+    checkedAt: now,
+    added: entries.filter((e) => e.added).map((e) => e.word.toLowerCase()),
+    blocked: new Set(entries.filter((e) => e.blocked).map((e) => e.word.toLowerCase())),
+    allowed: new Set(entries.filter((e) => e.added && !e.blocked).map((e) => e.word.toLowerCase())),
+  };
+  return overlay;
+}
+
+/** Resolve a client token index (1-based) to its word, or null. Covers added words. */
 export function wordAt(index: number): string | null {
   const words = expandedWords();
-  return index >= 1 && index <= words.length ? words[index - 1] : null;
+  if (index >= 1 && index <= words.length) return words[index - 1];
+  return addedWordAt(index);
+}
+
+/** The staff-added word at this index, or null for a recovered word or nothing. */
+export function addedWordAt(index: number): string | null {
+  const offset = index - expandedWords().length - 1;
+  const added = staffChanges().added;
+  return offset >= 0 && offset < added.length ? added[offset] : null;
+}
+
+/** Staff have blocked this word: the server censors it. */
+export function isBlockedWord(word: string): boolean {
+  return staffChanges().blocked.has(word.toLowerCase());
+}
+
+/**
+ * Staff have added this word. Players who loaded the game before it was added
+ * still send it as free text, which must not be censored.
+ */
+export function isAddedWord(word: string): boolean {
+  return staffChanges().allowed.has(word.toLowerCase());
+}
+
+/**
+ * `dictionary_177` as players download it: the recovered list with the added
+ * words appended, unflagged so each takes exactly one index. Null when the
+ * recovered file is missing.
+ *
+ * ⚠ APPENDED, never inserted: a word anywhere else would move the index of
+ * every word after it. Disney grew the list the same way ("xmas", "chilly").
+ */
+export function dictionaryForPlayers(): string | null {
+  expandedWords();
+  if (sourceText === null) return null;
+  const added = staffChanges().added;
+  if (added.length === 0) return sourceText;
+  const end = sourceText.lastIndexOf("]");
+  if (end < 0) return sourceText;
+  return `${sourceText.slice(0, end)}${added.map((w) => `, "${w}"`).join("")}${sourceText.slice(end)}`;
 }
 
 /**

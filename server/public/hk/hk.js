@@ -354,6 +354,7 @@ function buildSidebar() {
     h("div", { class: "head" }, "Content"),
     link("#/items", "box", "Item Browser"),
     admin ? link("#/catalog", "cart", "Shop Catalogue") : null,
+    link("#/dictionary", "tag", "Dictionary"),
     link("#/public-rooms", "door", "Public Rooms"),
     h("div", { class: "head" }, "Staff"),
     link("#/staff", "shield", "Staff List"),
@@ -393,6 +394,7 @@ const routes = [
   [/^\/bulk\/(ban|give|message)$/, pageBulk],
   [/^\/items$/, pageItems],
   [/^\/catalog$/, pageCatalog],
+  [/^\/dictionary$/, pageDictionary],
   [/^\/staff$/, pageStaff],
   [/^\/audit$/, pageAudit],
 ];
@@ -1352,6 +1354,86 @@ async function pageBulk(_params, kind) {
 async function pageItems() {
   const picker = itemPicker();
   return h("div", {}, pageHeader("Item Browser"), h("p", { class: "muted" }, "Look up any item by name or type code. Pictures are drawn from the game's own casts."), picker.el);
+}
+
+/* ----------------------------------------------------------- dictionary */
+
+/**
+ * The chat dictionary (server: dictionary.ts, dictionary-store.ts). Chat only
+ * shows words from it; anything else reaches other players as asterisks.
+ * Look a word up, then add it, censor it, or allow it again.
+ */
+async function pageDictionary(params) {
+  const q = params.get("q") ?? "";
+  const r = await api(`dictionary${q ? `?q=${encodeURIComponent(q)}` : ""}`);
+  const edit = r.canEdit;
+  const input = h("input", { type: "search", value: q, placeholder: "Type a word", autocomplete: "off", spellcheck: "false", maxlength: 30, style: "width:min(320px,100%)", "aria-label": "Word" });
+
+  const change = async (action, word, button) => {
+    if (action === "block" && !(await modal(`Censor "${word}"?`, { text: "Players will see asterisks in its place. Staff chat is never censored.", confirm: "Censor", danger: true }))) return;
+    if (action === "add" && !(await modal(`Add "${word}" to the dictionary?`, { text: "An added word keeps its place for good: removing it later censors it instead.", confirm: "Add word" }))) return;
+    if (await act(`dictionary/${action}`, { word }, button)) route();
+  };
+  const button = (label, action, word, cls) =>
+    h("button", { class: `btn ${cls} btn-sm`, type: "button", disabled: !edit, onclick: (e) => change(action, word, e.currentTarget) }, label);
+
+  // What the looked-up word is now, and what can be done with it.
+  let result = null;
+  if (q && !r.lookup) {
+    result = h("div", { class: "alert alert-warning" }, "A word is 1 to 30 letters, numbers or apostrophes, with no spaces.");
+  } else if (r.lookup) {
+    const { word, recovered, entry } = r.lookup;
+    let status;
+    let actions;
+    if (entry?.blocked) {
+      status = [h("span", { class: "label label-danger" }, "Censored"), " Staff have censored this word, so players see asterisks."];
+      actions = button("Allow again", "unblock", word, "btn-success");
+    } else if (entry?.added) {
+      status = [h("span", { class: "label label-success" }, "Added"), " Staff added this word; players can use it."];
+      actions = button("Censor", "block", word, "btn-danger");
+    } else if (recovered) {
+      status = [h("span", { class: "label label-success" }, "In the dictionary"), " Part of the game's original word list; players can use it."];
+      actions = button("Censor", "block", word, "btn-danger");
+    } else {
+      status = [h("span", { class: "label label-default" }, "Not in the dictionary"), " Players who type it are shown asterisks."];
+      actions = button("Add to dictionary", "add", word, "btn-primary");
+    }
+    result = h("div", { class: "panel" },
+      h("div", { class: "panel-heading" }, h("strong", {}, `"${word}"`), actions),
+      h("div", { class: "panel-body" }, status));
+  }
+
+  const by = (e) => (e.staffId ? userLink(e.staffId, r.names) : h("span", { class: "muted" }, "—"));
+  const added = r.entries.filter((e) => e.added);
+  const censored = r.entries.filter((e) => e.blocked && !e.added);
+
+  return h("div", {},
+    pageHeader("Dictionary"),
+    h("p", { class: "muted" },
+      `Chat only shows words from the game's dictionary (${num(r.recoveredWords)} original words, plus any added here). `,
+      "Anything else reaches other players as asterisks. Staff chat is never censored."),
+    edit ? null : h("div", { class: "alert alert-warning" }, "Changing the dictionary needs full admin permissions."),
+    h("form", { class: "flex mb", onsubmit: (e) => { e.preventDefault(); go(`#/dictionary?q=${encodeURIComponent(input.value.trim())}`); } },
+      input, h("button", { class: "btn btn-primary", type: "submit" }, icon("search"), "Look up")),
+    result,
+    h("h3", { class: "section-title" }, `Added words (${added.length})`),
+    table(["Word", "Status", "By", "Changed", ""],
+      added.map((e) => h("tr", {},
+        h("td", {}, h("a", { href: `#/dictionary?q=${encodeURIComponent(e.word)}` }, e.word)),
+        h("td", {}, e.blocked ? h("span", { class: "label label-danger" }, "Censored") : h("span", { class: "label label-success" }, "Allowed")),
+        h("td", { class: "nowrap" }, by(e)),
+        h("td", { class: "nowrap" }, fmtTime(e.updatedAt)),
+        h("td", { class: "nowrap" }, e.blocked ? button("Allow again", "unblock", e.word, "btn-success") : button("Censor", "block", e.word, "btn-danger")))),
+      "No words added yet. Look one up to add it."),
+    h("p", { class: "muted small" }, "Players get added words the next time they load the game. An added word keeps its place for good, so removing it censors it instead."),
+    h("h3", { class: "section-title" }, `Censored words (${censored.length})`),
+    table(["Word", "By", "Changed", ""],
+      censored.map((e) => h("tr", {},
+        h("td", {}, h("a", { href: `#/dictionary?q=${encodeURIComponent(e.word)}` }, e.word)),
+        h("td", { class: "nowrap" }, by(e)),
+        h("td", { class: "nowrap" }, fmtTime(e.updatedAt)),
+        h("td", { class: "nowrap" }, button("Allow again", "unblock", e.word, "btn-success")))),
+      "No dictionary words are censored."));
 }
 
 /* ------------------------------------------------------- shop catalogue */

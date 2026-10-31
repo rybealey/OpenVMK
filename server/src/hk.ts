@@ -88,6 +88,8 @@ import {
   saveStoredCatalog,
   type StoredShop,
 } from "./catalog-store.js";
+import { expandedWords, inRecoveredDictionary } from "./dictionary.js";
+import { addWord, blockWord, dictionaryEntries, dictionaryEntry, unblockWord } from "./dictionary-store.js";
 import { isPairedTeleporter } from "./furni-footprint.js";
 import { avatarFor, iconFor, isFurniCode, roomIconFor, warmIcons } from "./hk-icons.js";
 
@@ -205,6 +207,15 @@ async function onlineUsers(): Promise<{ users: OnlineUser[]; gameUp: boolean }> 
   return { users: (r.users as OnlineUser[] | undefined) ?? [], gameUp: !r.offline };
 }
 
+/**
+ * The ids of everyone in the game, for the public website; `null` while the
+ * game server is down. Ids only: rooms and addresses stay staff-side.
+ */
+export async function onlinePlayerIds(): Promise<number[] | null> {
+  const { users, gameUp } = await onlineUsers();
+  return gameUp ? users.map((u) => u.userId) : null;
+}
+
 const int = (v: unknown, what = "value"): number => {
   const n = Number(v);
   if (!Number.isInteger(n)) throw new HkError(400, `Bad ${what}.`);
@@ -231,6 +242,18 @@ function userByName(name: string): User | undefined {
     .prepare("SELECT id FROM users WHERE username = ? COLLATE NOCASE OR character_name = ? COLLATE NOCASE LIMIT 1")
     .get(name, name) as Row | undefined;
   return row ? getUserById(Number(row.id)) : undefined;
+}
+
+const DICTIONARY_WORD_HELP = "A word is 1 to 30 letters, numbers or apostrophes, with no spaces.";
+
+/**
+ * A word as the dictionary holds it: lower case, one word. The client splits
+ * chat on spaces and " .,!?:;)(]-", so a word containing any of those could
+ * never be typed as a whole; and a `"` would end the entry in the list file.
+ */
+function dictionaryWord(v: unknown): string | null {
+  const word = typeof v === "string" ? v.trim().toLowerCase() : "";
+  return /^[a-z0-9']{1,30}$/.test(word) ? word : null;
 }
 
 function requireUser(id: number): User {
@@ -969,6 +992,61 @@ async function api(req: IncomingMessage, me: User, path: string, url: URL): Prom
       })),
       names: namesFor(rows.flatMap((r) => [Number(r.staff_id), Number(r.target_id ?? 0)])),
     };
+  }
+
+  // ---- chat dictionary (dictionary.ts, dictionary-store.ts)
+  // A change bumps the store's version; the game server re-reads within a
+  // second and the web server serves the new list on the next game load.
+  if (path === "dictionary" && method === "GET") {
+    const entries = dictionaryEntries();
+    const lookup = dictionaryWord(q.get("q") ?? "");
+    return {
+      entries: entries.map((e) => ({ word: e.word, added: e.added, blocked: e.blocked, staffId: e.staffId, updatedAt: e.updatedAt })),
+      names: namesFor(entries.map((e) => e.staffId ?? 0)),
+      recoveredWords: expandedWords().length,
+      canEdit: isAdmin(me),
+      lookup: lookup
+        ? { word: lookup, recovered: inRecoveredDictionary(lookup), entry: dictionaryEntry(lookup) ?? null }
+        : null,
+    };
+  }
+
+  if (path.startsWith("dictionary/") && method === "POST") {
+    need(me, "admin");
+    const word = dictionaryWord(body.word);
+    if (!word) throw new HkError(400, DICTIONARY_WORD_HELP);
+    const entry = dictionaryEntry(word);
+    const recovered = inRecoveredDictionary(word);
+    const action = path.slice("dictionary/".length);
+
+    if (action === "add") {
+      if (entry?.added && !entry.blocked) throw new HkError(400, `"${word}" is already added.`);
+      if (recovered && !entry?.blocked) throw new HkError(400, `"${word}" is already in the dictionary.`);
+      if (entry?.blocked) {
+        unblockWord(word, me.id);
+        log("dictionary_unblock", null, word);
+        return { message: `"${word}" is allowed again.` };
+      }
+      addWord(word, me.id);
+      log("dictionary_add", null, word);
+      return { message: `Added "${word}". Players get it the next time they load the game; until then it still shows.` };
+    }
+    if (action === "block") {
+      if (entry?.blocked) throw new HkError(400, `"${word}" is already censored.`);
+      if (!recovered && !entry?.added) {
+        throw new HkError(400, `"${word}" isn't in the dictionary, so it is censored already.`);
+      }
+      blockWord(word, me.id);
+      log("dictionary_block", null, word);
+      return { message: `"${word}" is censored from now on.` };
+    }
+    if (action === "unblock") {
+      if (!entry?.blocked) throw new HkError(400, `"${word}" isn't censored.`);
+      unblockWord(word, me.id);
+      log("dictionary_unblock", null, word);
+      return { message: `"${word}" is allowed again.` };
+    }
+    throw new HkError(404, "Unknown dictionary action.");
   }
 
   if (path === "staff") {

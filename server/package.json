@@ -9,7 +9,7 @@
     "start:mus": "tsx src/mus-server.ts",
     "dev": "tsx watch src/assets.ts",
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "test": "tsx src/db.smoke.ts && tsx src/session.smoke.ts"
+    "test": "tsx src/db.smoke.ts && tsx src/dictionary.smoke.ts && tsx src/session.smoke.ts"
   },
   "devDependencies": {
     "tsx": "^4.19.3",
