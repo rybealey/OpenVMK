@@ -35,6 +35,7 @@ import {
 import { createTicket, databasePath, deleteSession, getUserByTicket, getUserByUsername, pruneExpired } from "./db.js";
 import { seasonFromEnv, seasonalCasts } from "./seasons.js";
 import { ARCHIVE, castExtracted, downloadFile } from "./paths.js";
+import { dictionaryForPlayers } from "./dictionary.js";
 import { publicUrls, withPublicUrls } from "./public-url.js";
 import { clientIp, trustedProxies } from "./client-ip.js";
 import { banPage, handleHk, warmHk } from "./hk.js";
@@ -962,6 +963,13 @@ function patchFurnimap(xml: string): string {
 }
 
 function serveArchiveFile(req: IncomingMessage, res: ServerResponse, file: string, pathname: string): void {
+  // The chat dictionary, with the words staff added in /hk appended (dictionary.ts).
+  // `send` marks it no-cache, so the next game load picks up an addition.
+  if (/\/dictionary_\d+$/i.test(pathname)) {
+    const body = dictionaryForPlayers() ?? readFileSync(file, "latin1");
+    send(res, 200, Buffer.from(body, "latin1"), "text/plain; charset=iso-8859-1");
+    return;
+  }
   if (/loadingscreens_\d+$/i.test(pathname)) {
     // Its artwork URLs name the authored host — see public-url.ts.
     const body = withPublicUrls(applySeasonToLoadingScreens(readFileSync(file, "latin1")), publicUrls(req));

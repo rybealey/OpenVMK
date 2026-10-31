@@ -4,6 +4,13 @@ VMK - what's new
 Unreleased
 ----------
 
+  - Housekeeping: Content > Dictionary manages the chat word list. Look a
+    word up, then add it (players stop seeing it as asterisks, and it
+    stops showing red as they type once they reload the game), censor a
+    word the original list allows, or allow it again. Changes reach the
+    game within a second, with no restart. Adding and censoring need full
+    admin; every change is in the Staff Log.
+
   - The Guard Dog with key animates again: its tail and key wag. Four
     other late items (915, 1351, 1352, 1354) get their animations back
     too.

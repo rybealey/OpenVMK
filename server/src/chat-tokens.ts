@@ -31,7 +31,7 @@
  * parameter following. Echoing those back unchanged would turn a friend's name
  * into a single "*", so `reEmit` rewrites them as free text.
  */
-import { wordAt } from "./dictionary.js";
+import { addedWordAt, isAddedWord, isBlockedWord, wordAt } from "./dictionary.js";
 import { getUserById } from "./db.js";
 
 /** A friend token's code is a user id; its display name is the character's. */
@@ -328,7 +328,8 @@ const MAX_CENSOR_RUN = 254;
  * Dictionary tokens pass through UNTOUCHED so the client resolves them against
  * its own expanded dictionary — that is what makes the rendering exact without
  * the server reimplementing the affix expander. Only the tokens whose meaning
- * differs by direction get rewritten.
+ * differs by direction get rewritten, plus the words staff have changed in /hk
+ * (blocked: censored; added: sent as text).
  */
 export function reEmit(
   tokens: ChatToken[],
@@ -341,9 +342,12 @@ export function reEmit(
   let count = 0;
   const pushText = (text: string) => {
     // Your own name is the one thing the client legitimately sends as free
-    // text, so it survives; anything else is a word the dictionary rejected.
-    const isOwnName = allowed !== undefined && text.trim().toLowerCase() === allowed;
-    if (censorUnknown && !isOwnName) {
+    // text, so it survives; anything else is a word the dictionary rejected —
+    // unless staff have since added it and this player's client loaded the
+    // list before they did.
+    const word = text.trim().toLowerCase();
+    const isOwnName = allowed !== undefined && word === allowed;
+    if (censorUnknown && !isOwnName && !isAddedWord(word)) {
       const run = Math.min(MAX_CENSOR_RUN, Math.max(1, text.length));
       out.push({ int: -run });
     } else {
@@ -353,10 +357,24 @@ export function reEmit(
 
   for (const token of tokens) {
     switch (token.kind) {
-      case "word":
+      case "word": {
+        const word = wordAt(token.index);
+        // Staff blocked it (/hk Content > Dictionary): censored like an unknown word.
+        if (censorUnknown && word !== null && isBlockedWord(word)) {
+          out.push({ int: -Math.min(MAX_CENSOR_RUN, Math.max(1, word.length)) });
+          break;
+        }
+        // A staff-added word goes out as TEXT, not its index: a client that
+        // loaded the list before the word was added has no word at that index.
+        const added = addedWordAt(token.index);
+        if (added !== null) {
+          out.push({ int: 0 }, { str: token.capitalised ? added.charAt(0).toUpperCase() + added.slice(1) : added });
+          break;
+        }
         if (token.capitalised) out.push({ int: -1000 });
         out.push({ int: token.index });
         break;
+      }
       case "room":
         // A room name came from the client's own room list, not free typing.
         out.push({ int: 0 }, { str: token.text });
