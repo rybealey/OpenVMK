@@ -72,5 +72,16 @@ const after = getUserById(first!.user.id);
 check("has_character becomes 1 -> navigator path", after?.has_character === 1);
 check("character name stored", after?.character_name === "ArielOfTheSea");
 
+// 8. the website registers and signs in separately
+const { register, signIn } = await import("./auth.js");
+const { getUserByUsername } = await import("./db.js");
+const belle = register("Belle", "rosegarden");
+check("register creates the account", belle !== undefined && belle.created);
+check("register refuses a taken name, any case", register("BELLE", "other-pass") === undefined);
+check("sign-in works for the new account", signIn("belle", "rosegarden")?.user.id === belle?.user.id);
+check("sign-in rejects a wrong password", signIn("Belle", "wrong-pass") === undefined);
+check("sign-in rejects an unknown name", signIn("Gaston", "rosegarden") === undefined);
+check("...and does not create it", getUserByUsername("Gaston") === undefined);
+
 console.log(`\n${failures === 0 ? "ALL PASS" : `${failures} FAILURE(S)`}`);
 process.exit(failures === 0 ? 0 : 1);

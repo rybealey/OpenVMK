@@ -207,6 +207,15 @@ async function onlineUsers(): Promise<{ users: OnlineUser[]; gameUp: boolean }> 
   return { users: (r.users as OnlineUser[] | undefined) ?? [], gameUp: !r.offline };
 }
 
+/**
+ * The ids of everyone in the game, for the public website; `null` while the
+ * game server is down. Ids only: rooms and addresses stay staff-side.
+ */
+export async function onlinePlayerIds(): Promise<number[] | null> {
+  const { users, gameUp } = await onlineUsers();
+  return gameUp ? users.map((u) => u.userId) : null;
+}
+
 const int = (v: unknown, what = "value"): number => {
   const n = Number(v);
   if (!Number.isInteger(n)) throw new HkError(400, `Bad ${what}.`);

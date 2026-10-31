@@ -11,8 +11,12 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import {
   createSession,
   createTicket,
+  createUser,
   getUserBySession,
+  getUserByUsername,
   loginOrCreate,
+  recordLogin,
+  verifyLogin,
   type User,
 } from "./db.js";
 import { bridgeSecret } from "./staff-db.js";
@@ -72,8 +76,40 @@ export interface AuthOutcome {
 }
 
 /**
- * The login page's behaviour: unknown username creates the account, known
- * username verifies the password. Returns undefined only for a bad password.
+ * Sign in to an EXISTING account. An unknown username fails exactly like a
+ * wrong password (and takes as long, see `verifyLogin`), so the sign-in page
+ * cannot be used to find out who has an account.
+ */
+export function signIn(username: string, password: string): AuthOutcome | undefined {
+  const user = verifyLogin(username, password);
+  if (!user) {
+    return undefined;
+  }
+  recordLogin(user.id);
+  return { user, created: false, token: createSession(user.id) };
+}
+
+/**
+ * Create an account and sign it in. Returns undefined when the username is
+ * already taken (usernames are case-insensitive).
+ */
+export function register(username: string, password: string): AuthOutcome | undefined {
+  if (getUserByUsername(username)) {
+    return undefined;
+  }
+  let user: User;
+  try {
+    user = createUser(username, password);
+  } catch {
+    // The UNIQUE constraint: the same name was registered a moment ago.
+    return undefined;
+  }
+  return { user, created: true, token: createSession(user.id) };
+}
+
+/**
+ * Unknown username creates the account, known username verifies the password.
+ * The dev player's fixed identity only; players use `register` and `signIn`.
  */
 export function authenticate(username: string, password: string): AuthOutcome | undefined {
   const result = loginOrCreate(username, password);

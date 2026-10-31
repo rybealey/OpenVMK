@@ -30,9 +30,13 @@ import {
   parseCookies,
   readFormBody,
   redirect,
+  register,
   setSessionCookie,
+  signIn,
+  type AuthOutcome,
 } from "./auth.js";
-import { createTicket, databasePath, deleteSession, getUserByTicket, getUserByUsername, pruneExpired } from "./db.js";
+import { renderAuthPage, renderHome, serveSiteFile } from "./site.js";
+import { createTicket, databasePath, deleteSession, getUserByTicket, pruneExpired } from "./db.js";
 import { seasonFromEnv, seasonalCasts } from "./seasons.js";
 import { ARCHIVE, castExtracted, downloadFile } from "./paths.js";
 import { dictionaryForPlayers } from "./dictionary.js";
@@ -1164,8 +1168,6 @@ const CLIENT_MOVIES: Record<string, string> = {
   custom: "/shockwave/custom.dcr",
 };
 
-const LOGIN_PAGE = join(ROOT, "server", "public", "login.html");
-
 /**
  * Replace the `username=` / `password=` lines in an external-variables file.
  *
@@ -1204,30 +1206,28 @@ function safeNext(candidate: string | null): string | null {
   return candidate;
 }
 
-function serveLoginPage(res: ServerResponse, error: string | null, next: string | null): void {
-  let html = readFileSync(LOGIN_PAGE, "utf8");
-  const escape = (value: string) =>
-    value.replace(/[<>&"]/g, (c) =>
-      c === "<" ? "&lt;" : c === ">" ? "&gt;" : c === "&" ? "&amp;" : "&quot;",
-    );
-  if (error) {
-    html = html.replace("<!--ERROR-->", `<p class="error">${escape(error)}</p>`);
-  }
-  // Carry the intended destination through the form, so someone who asked for
-  // the real Shockwave plugin at /client is not silently handed the WASM player
-  // at /play after logging in.
-  const target = safeNext(next);
-  if (target) {
-    html = html.replace(
-      "<!--NEXT-->",
-      `<input type="hidden" name="next" value="${escape(target)}">`,
-    );
-  }
-  res.writeHead(200, {
+function sendPage(res: ServerResponse, html: string, status = 200): void {
+  res.writeHead(status, {
     "Content-Type": "text/html; charset=utf-8",
     "Cache-Control": "no-store",
   });
   res.end(html);
+}
+
+/**
+ * The Sign in or Register page. Carries the intended destination through the
+ * form, so someone who asked for the real Shockwave plugin at /client is not
+ * silently handed the browser client at /play after signing in.
+ */
+function serveAuthPage(
+  res: ServerResponse,
+  page: "login" | "register",
+  next: string | null,
+  error: string | null = null,
+  username = "",
+  status = 200,
+): void {
+  sendPage(res, renderAuthPage(page, { error, next: safeNext(next), username }), status);
 }
 
 /**
@@ -1276,53 +1276,11 @@ setInterval(() => {
   for (const gates of [authFailures, signups]) for (const [ip, g] of gates) if (g.until <= t) gates.delete(ip);
 }, 10 * 60e3).unref();
 
-async function handleAuthPost(req: IncomingMessage, res: ServerResponse): Promise<void> {
-  let form: URLSearchParams;
-  try {
-    form = await readFormBody(req);
-  } catch {
-    redirect(res, "/?error=" + encodeURIComponent("That request was too large."));
-    return;
-  }
-  const username = (form.get("username") ?? "").trim();
-  const password = form.get("password") ?? "";
-  const next = safeNext(form.get("next"));
-  const back = (message: string) =>
-    "/?error=" +
-    encodeURIComponent(message) +
-    (next ? `&next=${encodeURIComponent(next)}` : "");
+const USERNAME_RULE = /^[A-Za-z0-9_. -]+$/;
+const USERNAME_HELP = "Usernames can use letters, numbers, spaces, dot, dash and underscore.";
 
-  if (!username || !password) {
-    redirect(res, back("Enter a username and a password."));
-    return;
-  }
-  if (username.length > 32 || !/^[A-Za-z0-9_. -]+$/.test(username)) {
-    redirect(res, back("Usernames can use letters, numbers, spaces, dot, dash and underscore."));
-    return;
-  }
-
-  // ⚠ Every attempt runs scrypt, and an unknown name CREATES an account, with
-  // no limit: a script could stall this server or mint accounts by the
-  // thousand. It also checks the same passwords as Housekeeping, so without
-  // its own limit Housekeeping's 5-try lockout was moot.
-  const ip = clientIp(req.socket.remoteAddress, req.headers);
-  const signingUp = !getUserByUsername(username);
-  if (gateClosed(authFailures, ip, AUTH_FAILURES_MAX) || (signingUp && gateClosed(signups, ip, SIGNUPS_MAX))) {
-    console.warn(`[auth] ${signingUp ? "sign-up" : "sign-in"} for "${username}" refused: rate limit (${ip})`);
-    redirect(res, back("Too many attempts. Wait a few minutes and try again."));
-    return;
-  }
-
-  const outcome = authenticate(username, password);
-  if (outcome?.created) countAttempt(signups, ip, SIGNUP_WINDOW_MS);
-  if (!outcome) {
-    countAttempt(authFailures, ip, AUTH_FAILURE_WINDOW_MS);
-    // Deliberately does NOT distinguish "wrong password" from anything else, so
-    // the page cannot be used to enumerate who has an account.
-    redirect(res, back("That username and password do not match."));
-    return;
-  }
-
+/** Signed in or registered: set the session, log it, send them on. */
+function finishAuth(req: IncomingMessage, res: ServerResponse, outcome: AuthOutcome, ip: string, next: string | null) {
   console.log(
     `[auth] ${outcome.created ? "created" : "signed in"} "${outcome.user.username}" (id=${outcome.user.id})`,
   );
@@ -1335,7 +1293,106 @@ async function handleAuthPost(req: IncomingMessage, res: ServerResponse): Promis
     "",
     String(req.headers["user-agent"] ?? ""),
   );
-  redirect(res, next ?? "/play");
+  redirect(res, next ?? "/");
+}
+
+/**
+ * POST /auth: sign in to an existing account. Never creates one — that is
+ * POST /register — so a mistyped name is an error, not a second account.
+ *
+ * A failure re-renders the form (with the username kept) rather than
+ * redirecting, so nothing the player typed ends up in a URL.
+ */
+async function handleAuthPost(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  let form: URLSearchParams;
+  try {
+    form = await readFormBody(req);
+  } catch {
+    serveAuthPage(res, "login", null, "That request was too large.", "", 413);
+    return;
+  }
+  const username = (form.get("username") ?? "").trim();
+  const password = form.get("password") ?? "";
+  const next = safeNext(form.get("next"));
+  const fail = (message: string, status: number) => serveAuthPage(res, "login", next, message, username, status);
+
+  if (!username || !password) {
+    fail("Enter a username and a password.", 400);
+    return;
+  }
+
+  // ⚠ Every attempt runs scrypt. It also checks the same passwords as
+  // Housekeeping, so without its own limit Housekeeping's 5-try lockout was moot.
+  const ip = clientIp(req.socket.remoteAddress, req.headers);
+  if (gateClosed(authFailures, ip, AUTH_FAILURES_MAX)) {
+    console.warn(`[auth] sign-in for "${username}" refused: rate limit (${ip})`);
+    fail("Too many attempts. Wait a few minutes and try again.", 429);
+    return;
+  }
+
+  const outcome = username.length <= 32 && USERNAME_RULE.test(username) ? signIn(username, password) : undefined;
+  if (!outcome) {
+    countAttempt(authFailures, ip, AUTH_FAILURE_WINDOW_MS);
+    // Deliberately does NOT distinguish "wrong password" from "no such
+    // account", so the page cannot be used to find out who has one.
+    fail("That username and password do not match.", 401);
+    return;
+  }
+  finishAuth(req, res, outcome, ip, next);
+}
+
+/** POST /register: create an account and sign it in. */
+async function handleRegisterPost(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  let form: URLSearchParams;
+  try {
+    form = await readFormBody(req);
+  } catch {
+    serveAuthPage(res, "register", null, "That request was too large.", "", 413);
+    return;
+  }
+  const username = (form.get("username") ?? "").trim();
+  const password = form.get("password") ?? "";
+  const next = safeNext(form.get("next"));
+  const fail = (message: string, status: number) => serveAuthPage(res, "register", next, message, username, status);
+
+  if (!username) {
+    fail("Choose a username.", 400);
+    return;
+  }
+  if (username.length > 32 || !USERNAME_RULE.test(username)) {
+    fail(USERNAME_HELP, 400);
+    return;
+  }
+  // Housekeeping's rule for a password it sets.
+  if (password.length < 6 || password.length > 128) {
+    fail("Passwords need 6 to 128 characters.", 400);
+    return;
+  }
+  if (form.get("password_confirm") !== password) {
+    fail("The two passwords don't match.", 400);
+    return;
+  }
+  if (form.get("rules") !== "yes") {
+    fail("Tick the box to agree to keep VMK friendly.", 400);
+    return;
+  }
+
+  // ⚠ Each new account runs scrypt and takes a row: without a limit a script
+  // could stall this server or mint accounts by the thousand.
+  const ip = clientIp(req.socket.remoteAddress, req.headers);
+  if (gateClosed(signups, ip, SIGNUPS_MAX)) {
+    console.warn(`[auth] sign-up for "${username}" refused: rate limit (${ip})`);
+    fail("Too many new accounts from here. Wait a while and try again.", 429);
+    return;
+  }
+
+  const outcome = register(username, password);
+  if (!outcome) {
+    fail("That username is taken. Try another one.", 409);
+    return;
+  }
+  countAttempt(signups, ip, SIGNUP_WINDOW_MS);
+  finishAuth(req, res, outcome, ip, next);
 }
 
 /**
@@ -1579,22 +1636,43 @@ function route(req: IncomingMessage, res: ServerResponse) {
   // Real-plugin entry point. `/client.php` mirrors the archive's own path so a
   // captured link still lands somewhere useful.
   // ---------------------------------------------------------------- auth ----
-  // GET /            login page (or straight through if already signed in)
-  // POST /auth       unknown username -> create; known -> verify; sets cookie
+  // GET /            the website's home page, signed in or not (site.ts)
+  // GET /login       Sign in    POST /auth      verify an existing account
+  // GET /register    Register   POST /register  create one; both set the cookie
   // GET /logout      drop the session
   // GET /play        the client, and ONLY the client -- requires a session
-  if (pathname === "/" || pathname === "/login") {
-    const next = safeNext(url.searchParams.get("next"));
-    if (currentUser(req)) {
-      redirect(res, next ?? "/play");
+  if (pathname === "/") {
+    // Before the website, `/` WAS the sign-in page: old links and bookmarks
+    // carrying a destination or an error belong on the new one.
+    if (url.searchParams.has("next") || url.searchParams.has("error")) {
+      redirect(res, `/login${url.search}`);
       return;
     }
-    serveLoginPage(res, url.searchParams.get("error"), next);
+    guard("home", async () => sendPage(res, await renderHome(currentUser(req))), res);
+    return;
+  }
+
+  if ((pathname === "/login" || pathname === "/register") && req.method !== "POST") {
+    const next = safeNext(url.searchParams.get("next"));
+    if (currentUser(req)) {
+      redirect(res, next ?? "/");
+      return;
+    }
+    serveAuthPage(res, pathname === "/login" ? "login" : "register", next, url.searchParams.get("error"));
     return;
   }
 
   if (pathname === "/auth" && req.method === "POST") {
     guard("auth", () => handleAuthPost(req, res), res);
+    return;
+  }
+
+  if (pathname === "/register" && req.method === "POST") {
+    guard("register", () => handleRegisterPost(req, res), res);
+    return;
+  }
+
+  if (pathname.startsWith("/site/") && serveSiteFile(res, pathname)) {
     return;
   }
 
@@ -1657,7 +1735,7 @@ function route(req: IncomingMessage, res: ServerResponse) {
   if (pathname === "/play") {
     const user = currentUser(req);
     if (!user) {
-      redirect(res, `/?next=${encodeURIComponent(pathname + url.search)}`);
+      redirect(res, `/login?next=${encodeURIComponent(pathname + url.search)}`);
       return;
     }
     const banned = banPage(user);
@@ -1699,8 +1777,10 @@ function route(req: IncomingMessage, res: ServerResponse) {
         // ⚠ PREPENDED, not spliced into <head>: the built page has no <head>
         // tag, so a replace would silently inject nothing. A classic script
         // runs before the page's module scripts wherever it sits.
+        // game-window.js keeps the website's Play Now pop-up at the stage's size.
         const html =
           `<script>window.__VMK_GAME_URL = ${JSON.stringify(gameUrl).replace(/</g, "\\u003c")};</script>\n` +
+          `<script src="/site/game-window.js"></script>\n` +
           readFileSync(page, "utf8");
         res.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" });
         res.end(html);
@@ -1752,7 +1832,7 @@ function route(req: IncomingMessage, res: ServerResponse) {
     // enough at a glance that it reads as "the plugin route is broken".
     const clientUser = currentUser(req);
     if (!clientUser) {
-      redirect(res, `/?next=${encodeURIComponent(pathname + url.search)}`);
+      redirect(res, `/login?next=${encodeURIComponent(pathname + url.search)}`);
       return;
     }
     const banned = banPage(clientUser);

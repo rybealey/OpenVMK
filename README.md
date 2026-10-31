@@ -39,7 +39,7 @@ You need about **5 GB of free disk space** (a 1.8 GB download that unpacks to ab
 
    Windows may warn because the file came from the internet: on *"Windows protected your PC"* click **More info**, then **Run anyway**; on *"Open File – Security Warning"* click **Run**.
 5. Wait for **"VMK is running"** (10–30 seconds). Your browser opens `http://127.0.0.1:5199/`. Leave the window open while you play; closing it stops the server.
-6. **Create your account. The first account on a new server becomes the admin**, with the staff panel at `/hk`.
+6. **Press Register and create your account. The first account on a new server becomes the admin**, with the staff panel at `/hk`.
 
 **Playing with friends, or hosting on a domain with HTTPS?** The release includes **`SELF-HOSTING.md`**: playing over your network, Docker with automatic HTTPS, running behind your own reverse proxy, every setting, backups, and troubleshooting.
 

@@ -16,7 +16,7 @@ VMK is two servers, both started by the one launcher:
 
 | Port | Server | What it does |
 | --- | --- | --- |
-| **5199** | web | Login page, the game client, its artwork and data, staff tools at `/hk` |
+| **5199** | web | The website (home, Register, Sign in), the game client, its artwork and data, staff tools at `/hk` |
 | **8080** | game | The live game: rooms, chat, trading. The browser connects to it over WebSocket. |
 
 The browser needs to reach **both**. Each player's browser is told where to
