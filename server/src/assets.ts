@@ -1769,8 +1769,10 @@ function route(req: IncomingMessage, res: ServerResponse) {
         // ⚠ PREPENDED, not spliced into <head>: the built page has no <head>
         // tag, so a replace would silently inject nothing. A classic script
         // runs before the page's module scripts wherever it sits.
+        // game-window.js keeps the website's Play Now pop-up at the stage's size.
         const html =
           `<script>window.__VMK_GAME_URL = ${JSON.stringify(gameUrl).replace(/</g, "\\u003c")};</script>\n` +
+          `<script src="/site/game-window.js"></script>\n` +
           readFileSync(page, "utf8");
         res.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" });
         res.end(html);

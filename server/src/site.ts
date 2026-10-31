@@ -32,6 +32,7 @@ const SITE = join(ROOT, "server", "public", "site");
 const TYPES: Record<string, string> = {
   ".css": "text/css; charset=utf-8",
   ".svg": "image/svg+xml",
+  ".js": "text/javascript; charset=utf-8",
   ".woff2": "font/woff2",
   ".txt": "text/plain; charset=utf-8",
 };

@@ -7,6 +7,7 @@
 <meta name="description" content="OpenVMK: Virtual Magic Kingdom, kept alive by fans. Free to play in your browser.">
 <link rel="preload" href="/site/fonts/fredoka-700.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="/site/site.css">
+<script src="/site/play.js" defer></script>
 </head>
 <body>
 <header class="topbar">
@@ -53,7 +54,7 @@
       </a>
 <!--/if:out-->
 <!--if:in-->
-      <a class="play-disc" href="/play" aria-label="Play now: enter the Kingdom">
+      <a class="play-disc" href="/play" data-play-window aria-label="Play now: enter the Kingdom (opens the game window)">
         <span class="play">Play<br>Now</span>
         <span class="game">Enter the Kingdom</span>
       </a>
@@ -126,7 +127,7 @@
           <ul class="my-rooms"><!--myRooms--></ul>
         </div>
         <div class="my-links">
-          <a href="/play">Play now</a>
+          <a href="/play" data-play-window>Play now</a>
 <!--staffLink-->
           <a href="/logout">Sign out</a>
         </div>
