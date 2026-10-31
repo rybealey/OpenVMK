@@ -37,7 +37,8 @@ import {
 } from "./auth.js";
 import { renderAuthPage, renderHome, serveSiteFile } from "./site.js";
 import { createTicket, databasePath, deleteSession, getUserByTicket, pruneExpired } from "./db.js";
-import { seasonFromEnv, seasonalCasts } from "./seasons.js";
+import { seasonalCasts } from "./seasons.js";
+import { currentSeason } from "./season-store.js";
 import { ARCHIVE, castExtracted, downloadFile } from "./paths.js";
 import { dictionaryForPlayers } from "./dictionary.js";
 import { publicUrls, withPublicUrls } from "./public-url.js";
@@ -640,7 +641,8 @@ function findCastByBasename(name: string): string | null {
 }
 
 /**
- * Seasonal decoration: `VMK_SEASON=xmas|halloween` (see seasons.ts).
+ * Seasonal decoration: set in /hk (Overview > Park season), else
+ * `VMK_SEASON=xmas|halloween` (see seasons.ts, season-store.ts).
  *
  * The archived build's config points several rooms at Christmas-decorated variants:
  * 16 `room.cast.*` entries under `vmk_spaces/vmk_holiday_overlays/` and
@@ -651,7 +653,7 @@ function findCastByBasename(name: string): string | null {
  * plain extraction, and four of the five sound paths do not exist. The season
  * is then applied from seasons.ts, which only names casts that exist.
  */
-const SEASON = seasonFromEnv();
+// Read per request: staff can change it from /hk (season-store.ts).
 
 /**
  * Can the TS client load this cast? That means its EXTRACTION exists — the
@@ -786,16 +788,17 @@ function applySeasonToVariables(text: string): string {
     perRoom.get(room)!.push(chosen);
   }
 
-  if (SEASON) {
+  const season = currentSeason();
+  if (season) {
     let rooms = 0;
     for (const [room, casts] of perRoom) {
-      const { casts: seasonal, changes } = seasonalCasts(SEASON, room, casts, castPathExists);
+      const { casts: seasonal, changes } = seasonalCasts(season, room, casts, castPathExists);
       if (changes.length === 0) continue;
       perRoom.set(room, seasonal);
       rooms++;
-      console.log(`[season] ${SEASON} room ${room}: ${changes.join(", ")}`);
+      console.log(`[season] ${season} room ${room}: ${changes.join(", ")}`);
     }
-    console.log(`[season] ${SEASON}: ${rooms} room(s) decorated`);
+    console.log(`[season] ${season}: ${rooms} room(s) decorated`);
   }
 
   const rendered = out.flatMap((entry) =>
@@ -901,7 +904,7 @@ function resolveArchiveFile(pathname: string): string | null {
  * and `fireworks` — there is no Christmas screen), anything else the default.
  */
 function applySeasonToLoadingScreens(text: string): string {
-  if (SEASON === "halloween") return text;
+  if (currentSeason() === "halloween") return text;
   let swapped = 0;
   const out = text.replace(/^(room\.\d+)=(?!loading\s*$)(\w+)\s*$/gm, (_line, key: string) => {
     swapped++;

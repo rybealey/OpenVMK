@@ -487,7 +487,44 @@ async function pageOverview() {
     h("h2", { class: "section-title" }, "Alert Game"),
     alertText,
     h("div", { class: "flex", style: "justify-content:space-between;margin-top:6px" }, counter, send),
+    seasonPanel(s.season),
   );
+}
+
+const SEASONS = [["none", "Everyday"], ["xmas", "Christmas"], ["halloween", "Halloween"]];
+
+/** Overview > Park season (server: season-store.ts). */
+function seasonPanel(season) {
+  const admin = state.me?.admin;
+  const label = (v) => SEASONS.find(([k]) => k === v)?.[1] ?? v;
+  const choice = h("select", { "aria-label": "Park season", disabled: !admin }, SEASONS.map(([v, l]) => h("option", { value: v, selected: v === season.current }, l)));
+  const save = h("button", { class: "btn btn-primary", type: "button", disabled: !admin }, "Save");
+  const where = () =>
+    season.source === "hk"
+      ? `Set here ${fmtTime(season.updatedAt)}.`
+      : season.source === "env"
+        ? "Set by VMK_SEASON when the server started. Saving here overrides it."
+        : "Not set: the everyday park.";
+  const note = h("p", { class: "muted small" }, where());
+  save.addEventListener("click", async () => {
+    if (choice.value === season.current && season.source === "hk") return toast(`The park is already set to ${label(choice.value)}.`);
+    const sure = await modal(`Switch the park to ${label(choice.value)}?`, {
+      text: "Main Street, Town Square, Central Plaza, Castle Forecourt and the Esplanade change (plus the Haunted Mansion Lobby at Halloween). Players see it the next time they load the game; anyone playing now should reload.",
+      confirm: "Switch",
+    });
+    if (!sure) return;
+    const r = await act("season", { season: choice.value }, save);
+    if (r) {
+      season = r.season;
+      note.textContent = where();
+    }
+  });
+  return h("div", {},
+    h("h2", { class: "section-title" }, "Park season"),
+    h("p", {}, "Decorations and music for the park's main rooms."),
+    h("div", { class: "flex" }, choice, save),
+    note,
+    admin ? null : h("p", { class: "muted small" }, "Changing the season needs full admin permissions."));
 }
 
 async function pageOnline() {
