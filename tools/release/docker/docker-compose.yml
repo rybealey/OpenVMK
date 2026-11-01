@@ -1,4 +1,4 @@
-# VMK on Docker.
+# VMKT on Docker.
 #
 #   cp .env.example .env      # optional: set your domain etc. (see .env.example)
 #   docker compose up -d      # plain HTTP on ports 5199 (web) and 8080 (game)

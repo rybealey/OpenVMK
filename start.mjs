@@ -1,4 +1,4 @@
-// Start VMK: both servers in one window, then open the game in the browser.
+// Start VMKT: both servers in one window, then open the game in the browser.
 //
 //   node start.mjs                 (what "Start VMK.bat" / start.sh run)
 //   node start.mjs --no-browser    just the servers
@@ -31,7 +31,7 @@ function fail(lines) {
 // ---- preflight: every failure here would otherwise surface as a blank page.
 const [major, minor] = process.versions.node.split(".").map(Number);
 if (major < 22 || (major === 22 && minor < 5)) {
-  fail([`VMK needs Node.js 22.5 or newer (this is ${process.versions.node}).`, "Get it from https://nodejs.org/"]);
+  fail([`VMKT needs Node.js 22.5 or newer (this is ${process.versions.node}).`, "Get it from https://nodejs.org/"]);
 }
 if (!existsSync(join(ROOT, "client", "dist", "client.html"))) {
   fail(["The game client is not built (client/dist is missing).", "In a dev checkout: npx vite build --config client/vite.config.ts"]);
@@ -49,7 +49,7 @@ const portBusy = (port) =>
 
 for (const port of [HTTP_PORT, GAME_PORT]) {
   if (await portBusy(port)) {
-    fail([`Port ${port} is already in use.`, "VMK may already be running in another window — close that one first."]);
+    fail([`Port ${port} is already in use.`, "VMKT may already be running in another window — close that one first."]);
   }
 }
 
@@ -134,7 +134,7 @@ process.on("SIGINT", () => stop(0));
 process.on("SIGTERM", () => stop(0));
 process.on("SIGHUP", () => stop(0)); // the console window was closed
 
-say("Starting VMK...");
+say("Starting VMKT...");
 
 // ---- wait until both are listening, then hand over to the browser.
 // ⚠ Not by connecting to the ports: every TCP connect to the game port opens a
@@ -148,8 +148,8 @@ say("Starting VMK...");
 const timeout = new Promise((resolve) => setTimeout(() => resolve("timeout"), 90_000).unref());
 const outcome = await Promise.race([
   (async () => {
-    await run("game", "mus-server", "VMK game server listening");
-    await run("web ", "assets", "VMK private server");
+    await run("game", "mus-server", "VMKT game server listening");
+    await run("web ", "assets", "VMKT private server");
   })(),
   timeout,
 ]);
@@ -161,7 +161,7 @@ if (outcome === "timeout" && !stopping) {
 if (!stopping) {
   say("");
   say("  ============================================================");
-  say(`   VMK is running:  ${GAME_URL}`);
+  say(`   VMKT is running:  ${GAME_URL}`);
   say("");
   say("   The FIRST account you create becomes the admin.");
   say("   Leave this window open while you play; close it to stop.");

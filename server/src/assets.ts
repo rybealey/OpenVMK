@@ -1376,7 +1376,7 @@ async function handleRegisterPost(req: IncomingMessage, res: ServerResponse): Pr
     return;
   }
   if (form.get("rules") !== "yes") {
-    fail("Tick the box to agree to keep VMK friendly.", 400);
+    fail("Tick the box to agree to keep VMKT friendly.", 400);
     return;
   }
 
@@ -2118,7 +2118,7 @@ const handler = SIM_LATENCY_MS > 0
   : route;
 createServer(handler).listen(PORT, BIND_HOST, () => {
   if (SIM_LATENCY_MS > 0) console.log(`  ⚠ Simulated latency: ${SIM_LATENCY_MS} ms per request (VMK_SIM_LATENCY_MS)`);
-  console.log(`VMK private server  http://${BIND_HOST}:${PORT}`);
+  console.log(`VMKT private server  http://${BIND_HOST}:${PORT}`);
   console.log(`  Proxies:  X-Forwarded-For trusted from ${trustedProxies()} (VMK_TRUSTED_PROXIES)`);
   // /hk's avatar and item-icon index reads every cast manifest; build it now,
   // in the background, instead of on the first profile view (see warmIcons).

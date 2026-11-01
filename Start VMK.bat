@@ -1,5 +1,5 @@
 @echo off
-title VMK
+title VMKT
 cd /d "%~dp0"
 
 rem A release carries its own Node in node\; a dev checkout uses the installed one.
@@ -8,7 +8,7 @@ if not exist "%NODE%" (
   where node >nul 2>nul
   if errorlevel 1 (
     echo.
-    echo   VMK needs Node.js 22.5 or newer, and none was found.
+    echo   VMKT needs Node.js 22.5 or newer, and none was found.
     echo   Get it from https://nodejs.org/ and run this again.
     echo.
     pause

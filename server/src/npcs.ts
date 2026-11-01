@@ -164,7 +164,7 @@ export const NPCS: Npc[] = [
     ],
     lines: [
       // Recovered (VMK Forums, Nov 2006, and the Esmeralda fortunes).
-      "Hello %name%, do you need help? Be sure to read the FAQ on the VMK homepage!",
+      "Hello %name%, do you need help? Be sure to read the FAQ on the VMKT homepage!",
       "I see firing cannons and sunken vessels in your future, %name%.",
       "I sense dancing princesses and pillaging pirates near, %name%.",
       "Don't forget to use your single-use magic pins before they expire, %name%!",

@@ -9024,7 +9024,7 @@ function createVmkSession(
         const until = mute.expiresAt ? ` until ${new Date(mute.expiresAt).toUTCString()}` : "";
         send(
           MSG.ADMIN_MESSAGE,
-          [{ str: wireText(`You have been muted by VMK Staff${until}.${mute.reason ? `\r${mute.reason}` : ""}`) }, { int: 3 }],
+          [{ str: wireText(`You have been muted by VMKT Staff${until}.${mute.reason ? `\r${mute.reason}` : ""}`) }, { int: 3 }],
           "AdminMessage (muted)",
         );
         return;
@@ -11214,7 +11214,7 @@ export function startShockwaveGameServer(port = PORT): Server {
   // keeps a local install invisible to the network.
   const host = process.env.VMK_HOST ?? "127.0.0.1";
   server.listen(port, host, () => {
-    console.log(`VMK game server listening on http://${host}:${port}`);
+    console.log(`VMKT game server listening on http://${host}:${port}`);
     console.log(`  GetSec:  /GetSec/${GETSEC_UUID}/{userId}`);
     console.log(`  Dev:     POST /dev/register  {userId,ticket}`);
     console.log(`  TCP/WS:  VMK handshake (message 2001 connectionReady + DH public key)`);
