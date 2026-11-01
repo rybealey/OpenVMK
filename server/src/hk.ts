@@ -89,6 +89,8 @@ import {
   type StoredShop,
 } from "./catalog-store.js";
 import { expandedWords, inRecoveredDictionary } from "./dictionary.js";
+import { currentSeason, isSeasonChoice, saveSeason, storedSeason, type SeasonChoice } from "./season-store.js";
+import { seasonFromEnv } from "./seasons.js";
 import { addWord, blockWord, dictionaryEntries, dictionaryEntry, unblockWord } from "./dictionary-store.js";
 import { isPairedTeleporter } from "./furni-footprint.js";
 import { avatarFor, iconFor, isFurniCode, roomIconFor, warmIcons } from "./hk-icons.js";
@@ -242,6 +244,20 @@ function userByName(name: string): User | undefined {
     .prepare("SELECT id FROM users WHERE username = ? COLLATE NOCASE OR character_name = ? COLLATE NOCASE LIMIT 1")
     .get(name, name) as Row | undefined;
   return row ? getUserById(Number(row.id)) : undefined;
+}
+
+const SEASON_LABEL: Record<SeasonChoice, string> = { none: "Everyday", xmas: "Christmas", halloween: "Halloween" };
+
+/** The season in force and where it comes from, for the Overview page. */
+function seasonStatus() {
+  const stored = storedSeason();
+  const current: SeasonChoice = currentSeason() ?? "none";
+  return {
+    current,
+    source: stored ? "hk" : seasonFromEnv() ? "env" : "default",
+    staffId: stored?.staffId ?? null,
+    updatedAt: stored?.updatedAt ?? null,
+  };
 }
 
 const DICTIONARY_WORD_HELP = "A word is 1 to 30 letters, numbers or apostrophes, with no spaces.";
@@ -454,6 +470,20 @@ async function api(req: IncomingMessage, me: User, path: string, url: URL): Prom
       chatToday: Number(
         (db.prepare("SELECT COUNT(*) n FROM chat_log WHERE created_at > ? AND kind = 'chat'").get(Date.now() - 86400e3) as Row).n,
       ),
+      season: seasonStatus(),
+    };
+  }
+
+  // ---- park season (season-store.ts): overrides VMK_SEASON; both servers follow it live.
+  if (path === "season" && method === "POST") {
+    need(me, "admin");
+    if (!isSeasonChoice(body.season)) throw new HkError(400, "Pick Everyday, Christmas or Halloween.");
+    const before = seasonStatus().current;
+    saveSeason(body.season, me.id);
+    log("season", null, `${SEASON_LABEL[before]} -> ${SEASON_LABEL[body.season]}`);
+    return {
+      message: `The park is set to ${SEASON_LABEL[body.season]}. Players see it the next time they load the game.`,
+      season: seasonStatus(),
     };
   }
 

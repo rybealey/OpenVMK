@@ -108,6 +108,14 @@ export function useSeasonalLayout(roomName: string, castKey: string): boolean {
   return true;
 }
 
+/** Forget any seasonal layout: the next use reads the everyday rooms again. */
+export function reloadGeometry(): void {
+  raw.clear();
+  built.clear();
+  variants.clear();
+  loaded = false;
+}
+
 function load(): void {
   if (loaded) return;
   loaded = true;

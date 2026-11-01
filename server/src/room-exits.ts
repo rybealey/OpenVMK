@@ -41,6 +41,12 @@ const EXITS_PATH = process.env.VMK_ROOM_EXITS ?? join(here, "..", "..", "assets"
 const byCode = new Map<number, ExitRule[]>();
 let loaded = false;
 
+/** Forget any seasonal renumbering: the next use reads the everyday exits again. */
+export function reloadExits(): void {
+  byCode.clear();
+  loaded = false;
+}
+
 function load(): void {
   if (loaded) return;
   loaded = true;

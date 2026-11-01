@@ -161,8 +161,8 @@ import {
 } from "./room-geometry.js";
 import { Ghost } from "./ghosts.js";
 import { GatorWaiter, SEAT } from "./gator-waiter.js";
-import { seasonalLayout, seasonalTileMap, useSeasonalLayout } from "./room-geometry.js";
-import { doorBackTo, exitAt, exitTilesTo, remapRoomTiles, type ExitRule } from "./room-exits.js";
+import { reloadGeometry, seasonalLayout, seasonalTileMap, useSeasonalLayout } from "./room-geometry.js";
+import { doorBackTo, exitAt, exitTilesTo, reloadExits, remapRoomTiles, type ExitRule } from "./room-exits.js";
 import { seedPublicFurni } from "./public-furni.js";
 import {
   FW_LOBBY_ROOM,
@@ -182,7 +182,8 @@ import {
   HM_LOBBY_ROOM, hmAction, hmHighScores, hmLobbyCommand, hmLobbyEnter, hmLobbyLeave, hmRoomStart, hmStageLoaded,
   type HmPlayer,
 } from "./haunted-mansion.js";
-import { deHoliday, seasonCastKey, seasonFromEnv, seasonalCasts } from "./seasons.js";
+import { deHoliday, seasonCastKey, seasonalCasts } from "./seasons.js";
+import { currentSeason } from "./season-store.js";
 import { ARCHIVE, OVERLAY, castExtracted, downloadFile } from "./paths.js";
 import { clientIp, remoteLabel } from "./client-ip.js";
 import { createPhotoSession, issuePhotoToken } from "./photo-server.js";
@@ -813,7 +814,7 @@ function loadRoomTexts(field: "name" | "desc"): Map<number, string> {
 }
 
 /**
- * With `VMK_SEASON` set, walk each decorated room on the layout its seasonal
+ * With a season set (/hk, or `VMK_SEASON`), walk each decorated room on the layout its seasonal
  * cast actually has. Most decorations are drawn over the everyday floor plan,
  * but Central Plaza (both seasons) and Christmas Main Street come from OLDER
  * builds of those rooms, with tiles renumbered and the later doors missing.
@@ -824,7 +825,9 @@ function loadRoomTexts(field: "name" | "desc"): Map<number, string> {
  * across by tile POSITION, and doors that build lacks are dropped.
  */
 function applySeasonalLayouts(castMap: Map<number, string[]>): void {
-  const season = seasonFromEnv();
+  roomCastMap = castMap;
+  const season = currentSeason();
+  layoutSeason = season;
   if (!season) return;
   for (const [code, casts] of castMap) {
     const served = seasonalCasts(season, String(code), casts.map(deHoliday), castExtracted).casts;
@@ -843,6 +846,25 @@ function applySeasonalLayouts(castMap: Map<number, string[]>): void {
     );
   }
 }
+
+let roomCastMap: Map<number, string[]> | null = null;
+/** The season the room layouts were last built for. */
+let layoutSeason: string | null = null;
+
+/**
+ * Staff can change the season from /hk while the game runs (season-store.ts).
+ * When it changes, put every room back to its everyday layout and apply the new
+ * season's. Players see the decorations once they reload the game; until then a
+ * player standing in a re-laid-out room may need to walk out and back in.
+ */
+function followSeason(): void {
+  if (!roomCastMap || currentSeason() === layoutSeason) return;
+  console.log(`[season] changed from ${layoutSeason ?? "everyday"} to ${currentSeason() ?? "everyday"}: re-laying out rooms`);
+  reloadGeometry();
+  reloadExits();
+  applySeasonalLayouts(roomCastMap);
+}
+setInterval(followSeason, 3000).unref();
 
 let redeemPrices: Map<number, number> | null = null;
 
