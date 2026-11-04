@@ -74,6 +74,7 @@ import {
   createTickets,
   getTickets,
   getTicket,
+  expireTickets,
   deleteTicket,
   areFriends,
   ENTRY_STATE,
@@ -124,7 +125,7 @@ import {
   transferItem,
   renameCharacter,
 } from "./db.js";
-import { loadAvatarCatalogue, type AvatarCatalogue } from "./avatar-sets.js";
+import { figureSetsStamp, loadAvatarCatalogue, type AvatarCatalogue } from "./avatar-sets.js";
 import {
   CMD,
   MSG,
@@ -151,6 +152,7 @@ import {
   HAND_WAVE,
   HAND_DRINK,
   HAND_CARRY_CUP,
+  HAND_TREASURE_MAP,
   MOUTH_CLOSED,
   MOUTH_TALKING,
   wireText,
@@ -162,7 +164,7 @@ import {
 import { Ghost } from "./ghosts.js";
 import { GatorWaiter, SEAT } from "./gator-waiter.js";
 import { reloadGeometry, seasonalLayout, seasonalTileMap, useSeasonalLayout } from "./room-geometry.js";
-import { doorBackTo, exitAt, exitTilesTo, reloadExits, remapRoomTiles, type ExitRule } from "./room-exits.js";
+import { doorBackTo, exitAt, exitTilesTo, padTilesOf, reloadExits, remapRoomTiles, type ExitRule } from "./room-exits.js";
 import { seedPublicFurni } from "./public-furni.js";
 import {
   FW_LOBBY_ROOM,
@@ -187,7 +189,7 @@ import { currentSeason } from "./season-store.js";
 import { ARCHIVE, OVERLAY, castExtracted, downloadFile } from "./paths.js";
 import { clientIp, remoteLabel } from "./client-ip.js";
 import { createPhotoSession, issuePhotoToken } from "./photo-server.js";
-import { followTrack, isRideStart, isRideTrack, planRide, rideOnFromTeleporter, type RidePlan } from "./rides.js";
+import { DOOR_OPEN, DOOR_SHUT, followTrack, isRideDoor, isRideStart, isRideTrack, planRide, rideOnFromTeleporter, type RidePlan } from "./rides.js";
 import {
   DARK_RIDE_COURTYARD,
   darkRideOfGate,
@@ -226,7 +228,7 @@ import {
   roomFreed,
   takeFastPass,
 } from "./room-entry-queue.js";
-import { isSingleUsePin, magicOf, magicTiming, startingLevel } from "./magic-pins.js";
+import { isSingleUsePin, magicOf, magicTiming, startingLevel, TREASURE_FOUND_EFFECT } from "./magic-pins.js";
 import { itemName } from "./catalog.js";
 import { NPC_REF_BASE, npcByRef, npcsInRoom, visitNpc, type Npc } from "./npcs.js";
 import {
@@ -804,7 +806,15 @@ function loadRoomTexts(field: "name" | "desc"): Map<number, string> {
   const pattern = new RegExp(`^room\\.(\\d+)\\.${field}=(.*)$`);
   for (const path of [join(OVERLAY, "external_texts.txt"), join(ARCHIVE, "external_texts.txt")]) {
     if (!existsSync(path)) continue;
-    for (const line of readFileSync(path, "latin1").split(/\r?\n/)) {
+    const text = readFileSync(path, "latin1");
+    // ⚠ The texts are Windows-1252. Editing the file as UTF-8 turns every ®, ©
+    // or § into U+FFFD (bytes EF BF BD), which the client then draws as a "?"
+    // diamond. It happened once already (repaired 2026-11-02).
+    const damaged = text.split("\xef\xbf\xbd").length - 1;
+    if (damaged > 0 && field === "name") {
+      console.warn(`[texts] ${path}: ${damaged} U+FFFD replacement char(s) — saved as UTF-8? It must stay Windows-1252.`);
+    }
+    for (const line of text.split(/\r?\n/)) {
       const match = pattern.exec(line);
       if (match) values.set(Number(match[1]), match[2].trim());
     }
@@ -1879,7 +1889,8 @@ function createElements(items: PlacedItem[]): OutgoingParam[] {
       // `PARAMS`: [0, own half id, partner half id]. See `pairHalfId`.
       { int: item.pair ? 5 : 2 },
       { int: item.dir },
-      { int: item.state },
+      // A ride door is only ever open for the one player who opened it.
+      { int: isRideDoor(item.typeCode) ? DOOR_SHUT : item.state },
     );
     if (item.pair) {
       params.push(
@@ -2030,6 +2041,8 @@ const CMD_CLIENT_DEBUG = 999;
  * at better than two a second.
  */
 const USE_DEBOUNCE_MS = Number(process.env.VMK_USE_DEBOUNCE_MS ?? 400);
+/** "It stays open for 30 seconds." */
+const RIDE_DOOR_OPEN_MS = Number(process.env.VMK_RIDE_DOOR_OPEN_MS ?? 30_000);
 /** ref -> when it was last used. See the note at the 584 handler. */
 const lastUse = new Map<number, number>();
 /** Dark-ride scenery: last click, and whether this double-click already opened the editor. */
@@ -2156,6 +2169,32 @@ const SWORD_PRIZES: SwordPrize[] = [
   { name: "Mission Space Costume", items: [41002, 44210, 46000, 48002], category: ITEM_CATEGORY.clothes },
 ];
 
+/**
+ * Treasure Detector Magic ("Gold!"): "you must keep moving around the area
+ * you're in ... when your character pauses, treasure appears around them"
+ * (wiki). How far is "moving around" is lost; DETECTOR_STEPS is tuned. A cast
+ * that never walks that far before its 0:21 runs out finds nothing.
+ *
+ * Prizes: the wiki's last list, from 16 May 2008 until VMK closed.
+ */
+const DETECTOR_STEPS = Number(process.env.VMK_DETECTOR_STEPS ?? 10);
+/** Standing still this long, after enough walking, is a pause. */
+const DETECTOR_PAUSE_MS = 1000;
+/** The coins (`magic_trdet_coins*`) show this long before the magic ends. */
+const DETECTOR_FOUND_MS = 4000;
+const TREASURE_DETECTOR_PRIZES: SwordPrize[] = [
+  { name: "4000 Credits", credits: 4000 },
+  { name: "7500 Credits", credits: 7500 },
+  { name: "a Flying Carpet Single Use", items: [12033], category: ITEM_CATEGORY.pins },
+  { name: "a Jester Hat Teal", items: [41056], category: ITEM_CATEGORY.clothes },
+  { name: "a Mardi Gras Mask", items: [41064], category: ITEM_CATEGORY.clothes },
+  { name: "a Party Hat Pink", items: [41093], category: ITEM_CATEGORY.clothes },
+  { name: "a Party Hat Yellow", items: [41095], category: ITEM_CATEGORY.clothes },
+  { name: "a Random Number Generator Color Blue", items: [132], category: ITEM_CATEGORY.items },
+  { name: "Teal Mickey Ears", items: [41039], category: ITEM_CATEGORY.clothes },
+  { name: "a Tiki Room Opens 1971 Pin", items: [2123], category: ITEM_CATEGORY.pins },
+];
+
 function turnstileFee(config: Record<string, string>): number {
   const fee = Number(config.fee);
   return Number.isInteger(fee) && fee > 0 ? fee : 0;
@@ -2239,8 +2278,8 @@ function scheduleTurnstileClose(ref: number, room: string, geometry: string | un
  * the direction and nothing else, so the state would change on the server and
  * never on screen.
  */
-function broadcastState(item: RoomItem, state: number): void {
-  const params: OutgoingParam[] = [
+function itemStateParams(item: RoomItem, state: number): OutgoingParam[] {
+  return [
     { int: item.ref },
     { int: ITEM_CATEGORY_FURNITURE },
     { int: item.tile },
@@ -2251,6 +2290,11 @@ function broadcastState(item: RoomItem, state: number): void {
     { int: item.dir },
     { int: state },
   ];
+}
+
+function broadcastState(item: RoomItem, state: number): void {
+  // A ride door moved or rotated stays shut for the room: see `createElements`.
+  const params = itemStateParams(item, isRideDoor(item.typeCode) ? DOOR_SHUT : state);
   for (const occupant of occupantsOf(item.room)) {
     occupant.send(MSG.UPDATE_ELEMENT, params, undefined);
   }
@@ -2679,6 +2723,19 @@ function queueMarkersFor(room: string | undefined): PlacedItem[] {
   return tiles.map((tile, i) => ({ ref: QUEUE_REF_BASE + i, typeCode: QUEUE_MARKER_TYPE, tile, dir: 3, state: 0 }));
 }
 
+/**
+ * Teleport pads: an invisible `68 Invisible Public Room Teleport` on each tile
+ * of a `pad` exit (the Emporium's teleporters and their partners in the shops).
+ * Its dir-3 block carries `ACT="1"`, which the pointer draws as the teleport
+ * highlight. dir 3 is the only facing with that block.
+ */
+const PAD_REF_BASE = 920000;
+const PAD_MARKER_TYPE = 68;
+function padMarkersFor(code: number | undefined): PlacedItem[] {
+  if (code === undefined) return [];
+  return padTilesOf(code).map((tile, i) => ({ ref: PAD_REF_BASE + i, typeCode: PAD_MARKER_TYPE, tile, dir: 3, state: 0 }));
+}
+
 /** The stored signature tokens, tolerating a row written before this existed. */
 function storedSloganTokens(userId: number): ChatToken[] {
   const raw = getSlogan(userId).json;
@@ -2778,10 +2835,13 @@ function avatarBlock(o: RoomOccupant): OutgoingParam[] {
   ];
 }
 
-/** Loaded once, lazily — parsing figuresets_28 is ~66 KB of text. */
+/** Loaded lazily — parsing figuresets is ~66 KB of text — and again when the file is edited. */
 let cachedCatalogue: AvatarCatalogue | null = null;
+let cachedCatalogueStamp = "";
 function avatarCatalogue(): AvatarCatalogue {
-  if (!cachedCatalogue) {
+  const stamp = figureSetsStamp();
+  if (!cachedCatalogue || stamp !== cachedCatalogueStamp) {
+    cachedCatalogueStamp = stamp;
     cachedCatalogue = loadAvatarCatalogue();
     console.log(
       `[avatar] catalogue: ${cachedCatalogue.male.length} male / ` +
@@ -3271,6 +3331,12 @@ function createVmkSession(
   let walkQueue: Array<[tile: number, legs: number, face?: number]> = [];
   /** A ride owns the avatar until this time; clicks to walk are ignored meanwhile. */
   let ridingUntil = 0;
+  /**
+   * Ride doors this player has open, ref -> the pending close. Nobody else sees
+   * them open and nobody else can ride through. Forgotten on leaving the room,
+   * because coming back draws every door shut.
+   */
+  const openRideDoors = new Map<number, ReturnType<typeof setTimeout>>();
   let darkRide: { ride: DarkRide; scene: number; timer?: ReturnType<typeof setTimeout> } | null = null;
   /** What to do when the current walk ends (a teleporter hop). See `walkAlong`. */
   let walkDone: (() => void) | undefined;
@@ -3284,7 +3350,7 @@ function createVmkSession(
    * doorway in `code` (the one leading back, so stepping straight out returns
    * you). Consumed by `enterRoom`.
    */
-  let pendingDoor: { code: number; tiles: number[]; face?: number } | null = null;
+  let pendingDoor: { code: number; tiles: number[]; face?: number; anchor?: number } | null = null;
   /**
    * The doorway we last walked out of, and the room it was in. Coming back
    * from where it led lands on it again, when that room has several doorways
@@ -3332,6 +3398,8 @@ function createVmkSession(
   let trading = 0;
   /** Set when a teleporter sent us into this room: play the arrival effect on `ROOM_START`. */
   let arrivedByTeleport: RoomItem | null = null;
+  /** Arriving through a `teleport` exit: beam in once the avatar exists, then step off (toward `face`). */
+  let arriveBeamingIn: { face?: number } | null = null;
   /** With `arrivedByTeleport`, when a RIDE went through: carry on riding from the partner. */
   let arrivedRiding: RideHop | null = null;
   /** The magic pin effect running on this avatar, if any. */
@@ -3341,10 +3409,15 @@ function createVmkSession(
     endEffect?: number;
     /** The effect forced the dance on (Dancing Inferno); undo it when it ends. */
     dance?: boolean;
-    /** A costume is showing (Pirate Costume); put the real outfit back at the end. */
-    costume?: boolean;
+    /**
+     * The costume showing (Pirate Costume), kept so a new room can show it too;
+     * the real outfit goes back at the end.
+     */
+    costume?: number[];
     /** The suit's time ran out in space; it comes off once we step off the spacewalk. */
     overdue?: boolean;
+    /** Treasure Detector: tiles walked this cast, and the pause being timed. */
+    detector?: { steps: number; found?: boolean; pause?: NodeJS.Timeout };
     timer?: NodeJS.Timeout;
   } | null = null;
   /** Timer for the NEXT queued pulse. Undefined means nothing is walking. */
@@ -3400,16 +3473,19 @@ function createVmkSession(
   /**
    * Which pose an arm takes, given what the legs are doing.
    *
-   * Order matters: walking wins (the arms swing with the stride), then dancing,
-   * then a wave. Waving is right-arm only — `prepare()` routes `m_bActWav`
-   * through `doHandWorkRight`.
+   * Order matters: dancing wins, then a wave, then walking (the arms swing with
+   * the stride) — walking interrupts neither emote. Waving is right-arm only —
+   * `prepare()` routes `m_bActWav` through `doHandWorkRight`, which also draws
+   * it over the walk the legs set on that arm.
    */
   const handPose = (legs: number, side: "left" | "right"): number => {
+    // The Treasure Detector's map is held in both hands, walking or not.
+    if (activeMagic?.detector) return HAND_TREASURE_MAP;
+    if (dancing) return HAND_DANCE;
+    if (waving && side === "right") return HAND_WAVE;
     // A cup stays in hand on the move — held, not sipped.
     if (cupHand && side === "left" && legs === LEGS_WALK) return HAND_CARRY_CUP;
     if (legs === LEGS_WALK) return HAND_WALK;
-    if (dancing) return HAND_DANCE;
-    if (waving && side === "right") return HAND_WAVE;
     if (cupHand && side === "left") return cupHand;
     return HAND_STAND;
   };
@@ -4192,7 +4268,8 @@ function createVmkSession(
         { int: pin.typeCode },
         { int: pinLevel(pin) },
         { int: isSingleUsePin(pin.typeCode) ? 1 : 0 },
-        { int: 0 }, // expiry
+        // Seconds remaining, as in `2532`. ⚠ -1 = never: 0 prints "Expires in 0 Day(s)".
+        { int: pin.expiresAt === undefined ? -1 : Math.max(0, Math.floor((pin.expiresAt - Date.now()) / 1000)) },
         { str: `w${pin.id}` },
       );
     }
@@ -4266,9 +4343,12 @@ function createVmkSession(
       pinsByType.set(key, entry);
     }
     const postersByType = group(posters);
+    // A ticket that expired on the lanyard goes from there too: `2536` never deletes.
+    if (inventoryId === 1 && live) for (const pinId of expireTickets(live.userId)) removeWornPin(pinId);
     // Room tickets: ONE entry per ticket, never grouped — each opens its own
     // room and expires on its own date. See the loop below and `2533`.
-    const tickets = inventoryId === 1 && live ? getTickets(live.userId) : [];
+    // A worn one is on the lanyard (inventory 3) instead, like any worn pin.
+    const tickets = inventoryId === 1 && live ? getTickets(live.userId).filter((t) => !t.worn) : [];
 
     const params: OutgoingParam[] = [
       { int: inventoryId },
@@ -4713,6 +4793,8 @@ function createVmkSession(
       ridingUntil = 0;
     }
     if (!darkRide && ridingUntil === Number.MAX_SAFE_INTEGER) ridingUntil = 0;
+    for (const close of openRideDoors.values()) clearTimeout(close);
+    openRideDoors.clear();
     currentRoomCode = roomCode;
     if (live) logRoomMove("entered", live.userId);
     // Tiles always come from the CASTS, whoever owns the room.
@@ -4757,7 +4839,7 @@ function createVmkSession(
       const doorway = pendingDoor.tiles;
       currentTile = freeTileNear(
         currentGeometryRoom,
-        doorway[Math.floor(doorway.length / 2)],
+        pendingDoor.anchor ?? doorway[Math.floor(doorway.length / 2)],
         new Set(occupiedTiles(currentRoomName, live ? live.userId : 1)),
       );
       if (pendingDoor.face !== undefined) facing = pendingDoor.face;
@@ -4909,6 +4991,21 @@ function createVmkSession(
     // re-pose) still carry the LOBBY tile — the avatar snapped there and back
     // every time its owner chatted.
     if (currentRoomName?.startsWith("hm#")) return;
+    // Treasure Detector: count the walking; a stand after enough of it starts
+    // the pause that finds the treasure, and any step cancels it.
+    const detector = activeMagic?.detector;
+    if (detector && !detector.found) {
+      if (tile !== currentTile) {
+        detector.steps++;
+        clearTimeout(detector.pause);
+        detector.pause = undefined;
+      } else if (legs === LEGS_STAND && detector.steps >= DETECTOR_STEPS && !detector.pause) {
+        detector.pause = setTimeout(() => {
+          detector.pause = undefined;
+          if (activeMagic?.detector === detector && !walkTimer && currentTile === tile) findTreasure();
+        }, DETECTOR_PAUSE_MS);
+      }
+    }
     pressMusicTiles(currentTile, tile);
     // Stepping into a dark-ride piece's "Animation Area" (the editor's own
     // title) sets it off — riding OR walking; nothing in the client or its
@@ -4987,6 +5084,17 @@ function createVmkSession(
         seatStack = block.height + 1;
         break;
       }
+      // Not sitting, so standing: walkable furniture with height (a gazebo's
+      // floor, a stage) lifts you onto it. `WalkToTile` adds the HGT of the item
+      // `stack` levels up the tile, so stack 0 leaves you at floor level with
+      // your feet inside the item. Flat items keep stack 0: they add no height,
+      // and it keeps their draw order as it was.
+      if (!seat) {
+        const blocks = getRoomItems(currentRoomName)
+          .map((i) => coveredTiles(currentGeometryRoom, i.tile, i.typeCode, i.dir).get(tile))
+          .filter((b): b is FurniBlock => b !== undefined);
+        if (blocks.some((b) => b.height > 0)) seatStack = blocks.length;
+      }
     }
     // Flying Carpet (effect 10): the client lifts and wobbles the avatar over
     // the carpet but takes the POSE from the legs we send — you ride it
@@ -5003,7 +5111,12 @@ function createVmkSession(
     lastPulseAt = Date.now();
     // The pose this pulse sends (same rules as the params below), kept for
     // anyone who enters later — see `RoomOccupant.legs`.
-    const poseLegs = legs === LEGS_WALK || legs >= 5 ? legs : dancing ? LEGS_DANCE : legs;
+    // Dancing overrides the legs and carries on through a walk: the client moves
+    // the avatar from the tile, whatever pose the legs are in. A vehicle (5..13)
+    // is a ride in progress and beats it, and so does driving a magic car, whose
+    // own driving frames play only while the legs say "walk" (`SetCarPantAction`).
+    const drivingCar = legs === LEGS_WALK && magic >= 100;
+    const poseLegs = legs >= 5 || drivingCar ? legs : dancing ? LEGS_DANCE : legs;
     const handLegs = magic >= 100 ? LEGS_STAND : legs;
     if (me) {
       me.tile = tile;
@@ -5031,10 +5144,7 @@ function createVmkSession(
       ...avatarActions({
         headDir: facing,
         bodyDir: facing,
-        // Dancing overrides the legs; walking overrides dancing, because you
-        // cannot do both and the client would render a confused hybrid.
-        // A vehicle (5..13) is a ride in progress and beats dancing too.
-        legs: legs === LEGS_WALK || legs >= 5 ? legs : dancing ? LEGS_DANCE : legs,
+        legs: poseLegs,
         // In a magic car (effects 100+) the arms stay put: the renderer hides
         // the legs under the car (`ActLeftFoot`, m_iMagic > 99) but still
         // swings whatever arms we send, so walking looked like running inside
@@ -5202,7 +5312,7 @@ function createVmkSession(
       }
       darkRide.timer = setTimeout(() => {
         if (!darkRide || darkRide.scene !== code) return;
-        magic = 0;
+        magic = magicAfterHop();
         if (next !== undefined) enterDarkScene(next);
         else finishDarkRide();
       }, teleporter ? TELEPORT_OUT_MS : WALK_STEP_MS);
@@ -5220,7 +5330,7 @@ function createVmkSession(
         sendPulse(currentTile, scene.vehicle, scene.entry.dir);
         setTimeout(() => {
           if (!darkRide || darkRide.scene !== code || magic !== MAGIC_TELEPORT_IN) return;
-          magic = 0;
+          magic = magicAfterHop();
           if (Date.now() - lastPulseAt >= WALK_STEP_MS) sendPulse(currentTile, scene.vehicle, facing);
         }, TELEPORT_IN_MS);
       }
@@ -5321,6 +5431,13 @@ function createVmkSession(
         [tiles[tiles.length - 1], LEGS_STAND, face],
       ], onDone);
     },
+    glide: (tile, onDone) => walkAlong([[tile, LEGS_STAND]], onDone),
+    leaveBy: (tile) => {
+      const rule = currentRoomCode === undefined ? null : exitAt(currentRoomCode, tile, true);
+      if (!rule) return;
+      ridingUntil = Date.now() + WALK_STEP_MS;
+      walkAlong([[tile, LEGS_WALK]], () => takeExit(rule));
+    },
   };
 
   /** Snap this avatar onto a free tile near `near` (no walk), for everyone in the room. */
@@ -5393,6 +5510,11 @@ function createVmkSession(
     magic = fx;
     sendPulse(currentTile, LEGS_STAND);
   };
+  /**
+   * What a teleport's effects hand back to: a pin effect runs on its own timer
+   * and outlasts the hop, so it is not simply 0.
+   */
+  const magicAfterHop = (): number => activeMagic?.effect ?? 0;
 
   /**
    * Down a Waterpark Pool slide: `_1` (where we arrived) -> `_2` -> `_3` in the
@@ -5498,9 +5620,10 @@ function createVmkSession(
   const stopMagic = (): void => {
     if (!activeMagic) return;
     clearTimeout(activeMagic.timer);
+    clearTimeout(activeMagic.detector?.pause);
     const end = activeMagic.endEffect;
     if (activeMagic.dance) dancing = false;
-    const hadCostume = activeMagic.costume === true;
+    const hadCostume = activeMagic.costume !== undefined;
     const hadSuit = activeMagic.effect === SPACE_SUIT_EFFECT;
     activeMagic = null;
     if (hadSuit && spaceGateOpen) showSpaceGate(false);
@@ -5688,7 +5811,8 @@ function createVmkSession(
       effect: cast.effect,
       endEffect: cast.endEffect,
       dance: forceDance,
-      costume: cast.costume !== undefined && me !== null,
+      costume: me ? cast.costume : undefined,
+      detector: cast.detector ? { steps: 0 } : undefined,
     };
     activeMagic.timer = setTimeout(() => {
       if (activeMagic?.pinId !== pinId) return;
@@ -5701,6 +5825,36 @@ function createVmkSession(
     if (cast.costume && me) showFigure(costumeFigure(me.figure, cast.costume));
     console.log(`[${label}] cast pin ${pinId} (type ${pin.typeCode}, ${pin.level}*) -> effect ${cast.effect} for ${durationMs}ms`);
     return true;
+  };
+
+  /**
+   * The Treasure Detector found something: coins round the feet (effect 14,
+   * with its `MFX-treasure`) for everyone, the prize now, the note once the
+   * coins are done — the magic ends there, "until you find treasure".
+   */
+  const findTreasure = (): void => {
+    const detector = activeMagic?.detector;
+    if (!activeMagic || !detector || detector.found || !live) return;
+    detector.found = true;
+    const pinId = activeMagic.pinId;
+    const userId = live.userId;
+    const name = characterName;
+    clearTimeout(activeMagic.timer);
+    setMagic(TREASURE_FOUND_EFFECT);
+    const prize = TREASURE_DETECTOR_PRIZES[Math.floor(Math.random() * TREASURE_DETECTOR_PRIZES.length)];
+    if (prize.credits) {
+      setCredits(userId, (getUserById(userId)?.credits ?? 0) + prize.credits, "Treasure Detector Magic");
+      sendCredits();
+    }
+    if (prize.items && prize.category !== undefined) {
+      addItems(userId, prize.items, prize.category);
+      queueItemList(1);
+    }
+    console.log(`[${label}] treasure detector ${pinId} found ${prize.name} after ${detector.steps} steps`);
+    activeMagic.timer = setTimeout(() => {
+      if (activeMagic?.pinId === pinId) stopMagic();
+      sendStaffMessage(userId, `Gold! ${name}, your Treasure Detector found ${prize.name}!`);
+    }, DETECTOR_FOUND_MS);
   };
 
   /**
@@ -5786,16 +5940,44 @@ function createVmkSession(
     return route;
   };
 
+  /**
+   * Stepping out of a teleporter EXIT's pad after beaming in, as
+   * `teleporterExit` does for a guest teleporter: up to two tiles, ending off
+   * the pad. The pad has no facing of its own, so try the arrival facing
+   * first, then the diagonals toward the viewer; the longest clear route wins.
+   */
+  const padStepOff = (preferred: number | undefined): number[] => {
+    const pads = new Set(currentRoomCode !== undefined ? padTilesOf(currentRoomCode) : []);
+    const blocked = new Set([
+      ...occupiedTiles(currentRoomName, live ? live.userId : 1),
+      ...furnitureTiles(currentRoomName, currentGeometryRoom),
+    ]);
+    let best: number[] = [];
+    for (const dir of new Set([preferred ?? 3, 3, 5, 1, 7])) {
+      const route: number[] = [];
+      let at = currentTile;
+      while (route.length < 2) {
+        const next = tileToward(currentGeometryRoom, at, dir);
+        if (next === null || blocked.has(next)) break;
+        route.push(next);
+        at = next;
+      }
+      while (route.length > 0 && pads.has(route[route.length - 1])) route.pop();
+      if (route.length > best.length) best = route;
+    }
+    return best;
+  };
+
   /** The arrival half of a hop: effect 7 on the partner's pad, then step out. */
   const finishTeleportIn = (partner: RoomItem) => {
     animateTeleporter(partner, TELEPORT_IN_MS);
     setMagic(MAGIC_TELEPORT_IN);
     setTimeout(() => {
       if (magic !== MAGIC_TELEPORT_IN) return;
-      magic = 0;
+      magic = magicAfterHop();
       const route = teleporterExit(partner);
       if (route.length === 0) {
-        setMagic(0);
+        setMagic(magicAfterHop());
         return;
       }
       const pulses: Array<[tile: number, legs: number, face?: number]> = route.map((t) => [t, LEGS_WALK]);
@@ -5855,12 +6037,12 @@ function createVmkSession(
     setMagic(MAGIC_TELEPORT_OUT);
     setTimeout(() => {
       if (currentRoomName !== room) return;
-      magic = 0;
+      magic = magicAfterHop();
       const landed = placeNear(to);
       console.log(`[${label}] beamed to ${landed} in ${room}`);
       setMagic(MAGIC_TELEPORT_IN);
       setTimeout(() => {
-        if (magic === MAGIC_TELEPORT_IN) setMagic(0);
+        if (magic === MAGIC_TELEPORT_IN) setMagic(magicAfterHop());
         if (then && currentRoomName === room) {
           ridingUntil = 0;
           then();
@@ -5896,6 +6078,14 @@ function createVmkSession(
     from: number,
   ): void => {
     for (const step of plan.steps) pulses.push([step.tile, plan.vehicle, step.facing]);
+    if (plan.door) {
+      const door = plan.door;
+      const reachDoor = () => rideIntoDoor(door, plan, hops);
+      ridingUntil = Date.now() + (pulses.length + 2) * WALK_STEP_MS;
+      if (pulses.length === 0) reachDoor();
+      else walkAlong(pulses, reachDoor);
+      return;
+    }
     const last = plan.steps[plan.steps.length - 1];
     const through = plan.end === "teleporter" && last && currentRoomName && hops < MAX_RIDE_HOPS
       ? getRoomItems(currentRoomName).find(
@@ -5910,12 +6100,46 @@ function createVmkSession(
     // The ride throws you off onto the tile past the last piece, the way you
     // were heading — not left standing on track you cannot walk on.
     const end = last?.tile ?? from;
-    const off = rideStepOff(end, plan.endFacing);
+    const off = rideStepOff(end, plan.endFacing) ?? rideStepAside(end, plan.endFacing);
     if (off !== null) pulses.push([off, LEGS_WALK, plan.endFacing]);
     pulses.push([off ?? end, LEGS_STAND, plan.endFacing]);
     ridingUntil = Date.now() + (pulses.length + 1) * WALK_STEP_MS;
     walkAlong(pulses);
   };
+
+  /**
+   * The rider has reached a ride door: through it if this player has it open,
+   * otherwise bounced off the track, to one side if there is room and back to
+   * the room's entrance if not.
+   */
+  const rideIntoDoor = (door: RoomItem, plan: RidePlan, hops: number): void => {
+    const room = currentRoomName;
+    const still = getRoomItem(door.ref);
+    if (!room || still?.room !== room) return;
+    if (openRideDoors.has(door.ref)) {
+      const onward = followTrack(
+        currentGeometryRoom, getRoomItems(room), still, plan.endFacing, plan.vehicle, still.tile, plan.origin,
+      );
+      console.log(`[${label}] ride through door ${door.ref}: ${onward.steps.length} tiles, ended: ${onward.end}`);
+      rideAlong([[still.tile, plan.vehicle, plan.endFacing]], onward, hops, still.tile);
+      return;
+    }
+    console.log(`[${label}] ride bounced off shut door ${door.ref}`);
+    const aside = rideStepAside(currentTile, plan.endFacing);
+    if (aside !== null) {
+      walkAlong([[aside, LEGS_WALK, plan.endFacing], [aside, LEGS_STAND, plan.endFacing]]);
+      ridingUntil = Date.now() + 3 * WALK_STEP_MS;
+      return;
+    }
+    ridingUntil = 0;
+    const spawn = spawnTileFor(currentGeometryRoom);
+    if (spawn !== null) placeNear(spawn);
+    sendPulse(currentTile, LEGS_STAND, facing);
+  };
+
+  /** A free tile to one side of `from`, for a rider thrown off the track. */
+  const rideStepAside = (from: number, heading: number): number | null =>
+    rideStepOff(from, (heading + 2) % 8) ?? rideStepOff(from, (heading + 6) % 8);
 
   /**
    * Where a rider gets off at the end of a ride: the next tile along
@@ -5943,7 +6167,7 @@ function createVmkSession(
     sendPulse(currentTile, ride.vehicle, partner.dir);
     setTimeout(() => {
       if (currentRoomName !== room) return;
-      magic = 0;
+      magic = magicAfterHop();
       const plan = rideOnFromTeleporter(currentGeometryRoom, getRoomItems(room), partner, ride.vehicle);
       console.log(
         `[${label}] ride on from teleporter ${partner.ref}: ` +
@@ -5985,7 +6209,7 @@ function createVmkSession(
     setTimeout(() => {
       if (currentRoomName !== room) return; // left some other way meanwhile
       if (partner.room === room) {
-        magic = 0;
+        magic = magicAfterHop();
         const pad = teleporterPad(partner);
         currentTile = pad;
         facing = face;
@@ -6009,10 +6233,10 @@ function createVmkSession(
       }
       const guestId = /^guest:(\d+)$/.exec(partner.room)?.[1];
       const guest = guestId ? getGuestRoom(Number(guestId)) : undefined;
-      magic = 0;
+      magic = magicAfterHop();
       if (!guest) {
         console.log(`[${label}] teleporter ${item.ref}: partner is in ${partner.room}, not a guest room`);
-        setMagic(0);
+        setMagic(magicAfterHop());
         return;
       }
       pendingArrival = { room: partner.room, partner, facing: face };
@@ -6023,7 +6247,7 @@ function createVmkSession(
         pendingArrival = null;
         arrivedByTeleport = null;
         arrivedRiding = null;
-        setMagic(0);
+        setMagic(magicAfterHop());
       }
     }, TELEPORT_OUT_MS);
   };
@@ -6089,7 +6313,20 @@ function createVmkSession(
    * rule for N (room-exits.ts) says whether that leaves the room, hops within
    * it, or opens a themed guest-room list.
    */
-  const takeExit = (rule: ExitRule): void => {
+  const takeExit = (rule: ExitRule, beamedOut = false): void => {
+    // A teleporter exit beams you out (effect 6) first, like a guest-room
+    // teleporter, and only then moves you.
+    if (rule.teleport && !beamedOut && currentRoomName) {
+      const room = currentRoomName;
+      ridingUntil = Date.now() + TELEPORT_OUT_MS + 200;
+      setMagic(MAGIC_TELEPORT_OUT);
+      setTimeout(() => {
+        if (currentRoomName !== room) return; // left some other way meanwhile
+        magic = magicAfterHop();
+        takeExit(rule, true);
+      }, TELEPORT_OUT_MS);
+      return;
+    }
     const from = currentRoomCode;
     if (rule.navigator !== undefined) {
       // The client answers with GET_POPULAR_BY_TYPE, which opens the list.
@@ -6152,7 +6389,12 @@ function createVmkSession(
       const tiles = exitTilesWithIds(ROOM_CODES.get(MONORAIL_STATION), pier ? STATION_PIER_STAIRS : STATION_GROUND_STAIRS);
       if (tiles.length) doorway = tiles;
     }
-    pendingDoor = doorway ? { code, tiles: doorway, face: rule.face } : null;
+    // Landing on a teleporter (the other end of a pad pair) beams you in. A pad
+    // lands you on its FIRST tile — the one inside the teleporter art — rather
+    // than the doorway's middle, which can be the floor in front of it.
+    const landing = doorway ? exitAt(code, doorway[0], false) : null;
+    pendingDoor = doorway ? { code, tiles: doorway, face: rule.face, anchor: landing?.pad ? doorway[0] : undefined } : null;
+    arriveBeamingIn = landing?.teleport ? { face: rule.face } : null;
     console.log(
       `[${label}] exit "${rule.label}" -> ${code} (${ROOM_NAMES.get(code) ?? ROOM_CODES.get(code) ?? "?"})` +
         `${rule.flag ? ` [inferred: ${rule.flag}]` : ""}`,
@@ -7011,6 +7253,33 @@ function createVmkSession(
         arrivedRiding = null;
         setTimeout(() => (ride ? rideOnFrom(partner, ride) : finishTeleportIn(partner)), 600);
       }
+      // Arrived through a teleporter exit (the Emporium's): beam in on the pad.
+      // Then step off it, as out of a guest teleporter (`finishTeleportIn`).
+      if (arriveBeamingIn) {
+        const face = arriveBeamingIn.face;
+        arriveBeamingIn = null;
+        const room = currentRoomName;
+        setTimeout(() => {
+          if (currentRoomName !== room) return;
+          // Appear facing the way you are about to walk out, not the way you
+          // happened to face going in.
+          const route = padStepOff(face);
+          const out = route.length ? directionBetween(currentGeometryRoom, currentTile, route[0]) : null;
+          if (out !== null) facing = out;
+          setMagic(MAGIC_TELEPORT_IN);
+          setTimeout(() => {
+            if (magic !== MAGIC_TELEPORT_IN || currentRoomName !== room) return;
+            magic = magicAfterHop();
+            if (route.length === 0) {
+              setMagic(magicAfterHop());
+              return;
+            }
+            const pulses: Array<[tile: number, legs: number, face?: number]> = route.map((t) => [t, LEGS_WALK]);
+            pulses.push([route[route.length - 1], LEGS_STAND]);
+            walkAlong(pulses);
+          }, TELEPORT_IN_MS);
+        }, 600);
+      }
       // "start" — the client has the room's casts and wants its contents.
       // Answer with the player's own avatar, or the room stays empty.
       //
@@ -7092,6 +7361,13 @@ function createVmkSession(
         name: characterName,
         sex: outfit.sex,
         figure: outfit.figure,
+        // Whatever is still going carries into the new room: the costume, and
+        // the pose a dance or the Treasure Detector's map holds, which would
+        // otherwise only come back on the first pulse here.
+        shownFigure: activeMagic?.costume ? costumeFigure(outfit.figure, activeMagic.costume) : undefined,
+        legs: dancing ? LEGS_DANCE : undefined,
+        leftHand: handPose(LEGS_STAND, "left"),
+        rightHand: handPose(LEGS_STAND, "right"),
         tile: currentTile,
         facing,
         badges: live ? getBadges(live.userId) : [],
@@ -7200,7 +7476,8 @@ function createVmkSession(
         };
       });
       const queueMarkers = currentGuestRoom() ? [] : queueMarkersFor(currentGeometryRoom);
-      const elements = [...seats, ...placed, ...npcs, ...queueMarkers];
+      const padMarkers = currentGuestRoom() ? [] : padMarkersFor(currentRoomCode);
+      const elements = [...seats, ...placed, ...npcs, ...queueMarkers, ...padMarkers];
       if (elements.length > 0) {
         send(
           MSG.CREATE_ELEMENTS,
@@ -7766,6 +8043,24 @@ function createVmkSession(
           return;
         }
         lastUse.set(ref, now);
+      }
+
+      // A ride door opens for whoever matched its pattern, and for nobody else:
+      // no stored state, no broadcast. `CRoomItemStateAnimator.select` checks the
+      // pattern and sends 584 only on a match; state 2 has no pattern to match,
+      // so a door already open just stays open for its full time.
+      if (isRideDoor(item.typeCode)) {
+        if (!use || openRideDoors.has(ref)) return;
+        send(MSG.UPDATE_ELEMENT, itemStateParams(item, DOOR_OPEN), `UpdateElement ride door ${ref} open`);
+        openRideDoors.set(ref, setTimeout(() => {
+          openRideDoors.delete(ref);
+          const still = getRoomItem(ref);
+          if (still && still.room === currentRoomName) {
+            send(MSG.UPDATE_ELEMENT, itemStateParams(still, DOOR_SHUT), `UpdateElement ride door ${ref} shut`);
+          }
+        }, RIDE_DOOR_OPEN_MS));
+        console.log(`[${label}] ${characterName} opened ride door ${ref}`);
+        return;
       }
 
       // A water cooler pours you a cup — only standing next to it. Falls
@@ -9101,13 +9396,24 @@ function createVmkSession(
           // ⚠ A MUSIC STAGE HOLDS YOU UNTIL YOUR SONG IS PLAYED OUT. Clicks do
           // nothing; the turn ends with the song, the picker's CANCEL, or the
           // picker timing out — never by walking off mid-performance.
-          if (inQueue.def.hosted) return;
+          if (inQueue.def.hosted || inQueue.def.leavesRoom) return;
           stepDown(currentRoomName, live.userId);
           return;
         }
         leaveQueue(currentRoomName, live.userId);
         placeNear(inQueue.def.line[0]);
         console.log(`[${label}] left the ${inQueue.def.name} line`);
+      }
+      // Arrived from the far side of a one-way drop (the Mine's `jump_d` lands at
+      // the foot of the waterfall): its tiles are the line's, so the only way
+      // out is the exit you came in by.
+      const footOfDrop = inQueue ? undefined : queuesIn(currentGeometryRoom).find(
+        (q) => q.leavesRoom && (q.stage === currentTile || q.exit.includes(currentTile)),
+      );
+      if (footOfDrop && currentRoomCode !== undefined) {
+        const way = exitAt(currentRoomCode, footOfDrop.exit[footOfDrop.exit.length - 1], true);
+        if (way) takeExit(way);
+        return;
       }
       // Clicking anywhere on a line means "get in line": walk to its start.
       const clickedQueue = queueAt(currentGeometryRoom, target);
@@ -9135,13 +9441,21 @@ function createVmkSession(
       // short walk than a glide across the room. Empty means "don't move".
       // Other avatars are impassable, so clicking an occupied tile walks you
       // as close as the crowd allows instead of standing inside someone.
+      const solidFurniture = furnitureTiles(currentRoomName, currentGeometryRoom, live?.userId);
+      // A seat marked SIT="1" WLK="0" (Tiki Beach Chair, Royal Thrones) is solid
+      // to walk through, but the client's pointer offers it as a seat, so
+      // clicking it has to get you there. The search stops at its target, so
+      // this opens the seat only as the end of the route.
+      if (surfaceOf(currentRoomName, currentGeometryRoom, live?.userId).get(target)?.sit) {
+        solidFurniture.delete(target);
+      }
       const path = findPath(
         currentGeometryRoom, // tiles come from the casts
         currentTile,
         target,
         new Set([
           ...occupiedTiles(currentRoomName, ref), // people
-          ...furnitureTiles(currentRoomName, currentGeometryRoom, live?.userId), // solid furniture
+          ...solidFurniture, // solid furniture
           ...blockedByQueues(currentGeometryRoom), // queue lines: joined, not walked
         ]),
         stepRule(),
@@ -9641,6 +9955,8 @@ function createVmkSession(
       const row = peekOwnedItem(ref, live.userId);
       if (!row || row.category !== ITEM_CATEGORY.pins) {
         console.log(`[${label}] refused ${command === CMD.WEAR_PIN ? "wear" : "unwear"} ${ref}: not your pin`);
+        // TAKE OFF on a row that is gone: the client's grid is stale, clear it.
+        if (!row && command === CMD.UNWEAR_PIN) removeWornPin(ref);
         return;
       }
       const wear = command === CMD.WEAR_PIN;
@@ -10018,6 +10334,17 @@ function createVmkSession(
         return;
       }
       if (!deleteTicket(live.userId, ref)) return;
+      // `2538` only removes it from the main grid. Sold off the lanyard (a grid
+      // that had not refreshed yet), it has to come off there too, or it stays
+      // on show with a TAKE OFF that can never work.
+      if (ticket.worn) {
+        removeWornPin(ref);
+        if (me && currentRoomName) {
+          for (const occupant of audienceOf(currentRoomName, me.userId)) {
+            occupant.send(MSG.CREATE_AVATARS, [{ int: 1 }, ...avatarBlock(me)], undefined);
+          }
+        }
+      }
       const credits = (getUserById(live.userId)?.credits ?? 0) + ROOM_TICKET_SELL_PRICE;
       setCredits(live.userId, credits, "Ticket Sale");
       send(
@@ -10216,14 +10543,22 @@ function createVmkSession(
 
     if (command === CMD.START_ACTION || command === CMD.STOP_ACTION) {
       // Emotes. Body is one int: 0 = dance, 1 = wave
-      // (`CEmoticons.eventProcEmoticons`). Dance is a toggle the player ends
-      // with STOP_ACTION; wave is one-shot and nothing reports its end, so the
-      // server clears it — otherwise the arm stays up forever.
+      // (`CEmoticons.eventProcEmoticons`). Dance lasts until the player turns it
+      // off; wave is one-shot and nothing reports its end, so the server clears
+      // it — otherwise the arm stays up forever.
+      //
+      // ⚠ Either command flips the dance, rather than Start = on and Stop = off:
+      // the client forgets its button state on `room_leave` while the dance
+      // carries into the next room, so its next click says Start to a player
+      // who is already dancing — and they mean "stop".
+      //
+      // Mid-walk, a pose change waits for the next step's pulse: a pulse on the
+      // same tile would snap the avatar to the end of the step it is walking.
       const action = body.length > 0 ? decodeToInt(body, 0).value : 0;
       const starting = command === CMD.START_ACTION;
 
       if (action === EMOTE_DANCE) {
-        dancing = starting;
+        dancing = !dancing;
       } else if (action === EMOTE_WAVE) {
         if (waveTimer) clearTimeout(waveTimer);
         waving = starting;
@@ -10231,7 +10566,7 @@ function createVmkSession(
           waveTimer = setTimeout(() => {
             waveTimer = undefined;
             waving = false;
-            sendPulse(currentTile, LEGS_STAND);
+            if (!walkTimer) sendPulse(currentTile, LEGS_STAND);
           }, WAVE_MS);
         }
       } else {
@@ -10244,7 +10579,7 @@ function createVmkSession(
           `${action === EMOTE_DANCE ? "dance" : "wave"} (dancing=${dancing} waving=${waving})`,
       );
       // Same tile: a pose change, not a move.
-      sendPulse(currentTile, LEGS_STAND);
+      if (!walkTimer) sendPulse(currentTile, LEGS_STAND);
       // Waving down the Gator Waiter from a Blue Bayou table.
       if (starting && action === EMOTE_WAVE && currentRoomName) {
         waiters.get(currentRoomName)?.waved(characterName, currentTile);
