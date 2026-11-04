@@ -17,9 +17,60 @@ Unreleased
     word the original list allows, or allow it again. Changes reach the
     game within a second, with no restart. Adding and censoring need full
     admin; every change is in the Staff Log.
+
+v1.6.0 (2026-11-04) - Treasure Detector, Space Mountain Ride Door, magic across rooms
+--------------------------------------------------------------------------------------
+
+  - The browser tab shows your avatar's head while you are logged in.
+  - More billboards around the park show their original pictures.
+  - The Monsters Inc Laugh Floor shows its own picture in the shop, not
+    the picture of the room you paged from.
+  - Room pages in the shop no longer show a land badge, as in the original
+    game. It could name the wrong land.
+  - The Housekeeping shop editor now says which shop tab each page shows
+    on, and won't save a page that tab can't draw, such as clothing or
+    pins on a furniture shelf.
+  - The waterfall in Injun Joe's Cave works: step onto it and you go over
+    the falls and out to Big Thunder Mountain Mine.
   - The Guard Dog with key animates again: its tail and key wag. Four
     other late items (915, 1351, 1352, 1354) get their animations back
     too.
+  - Treasure Detector Magic works ("Gold!"). Your avatar glows and holds
+    a treasure map; keep walking, then stop, and coins appear with a
+    prize: credits, a hat, ears or a pin. It lasts 21 seconds and
+    recharges in an hour.
+  - Party Hats Pink, Teal and Yellow can be worn, and show in
+    Housekeeping.
+  - The Emporium's teleporters (and their partners in "it's a small
+    world" Imports, the Golden Horseshoe Mercantile, Shrunken Ned's Shop
+    and Tomorrowland Hub) work like the guest-room teleporters: the
+    pointer marks them, you beam out and beam in, and you arrive inside
+    the teleporter and walk out of it.
+  - Room descriptions and other texts show their (R), (C) and section
+    signs again (for example "Disneyland(R) park"). They had turned into
+    a question mark in a diamond.
+  - The Space Mountain Ride Door works. Double-click it when the patterns
+    match and it opens for 30 seconds, for you alone. Ride into it shut
+    and you are thrown off the track.
+  - A ride no longer carries you onto track that doesn't connect, such
+    as an uphill or downhill sitting side-on to the piece before it.
+  - The Royal Ride Start and Royal Ride Teleporter work as ride pieces.
+  - Uphills only go up and downhills only go down. A ride now stops at a
+    hill it meets the wrong way round.
+  - You stand on top of walkable furniture that has height, such as the
+    Royal Gazebo's floor, instead of sinking into it.
+  - Clicking a seat like the Tiki Beach Chair, Royal Throne or Gumdrop
+    Chair now sits you in it. You used to stop on the tile next to it.
+    You still walk around these seats when going past them.
+  - Magic keeps going when you change rooms. A costume stays on, a dance
+    or the Treasure Detector's map carries over, and teleporters no
+    longer cancel the effect. It lasts as long as it would have anyway.
+  - Dancing keeps going while you walk, and stays on until you click
+    Dance again, even in another room. A wave keeps going while you walk
+    too, until it runs out.
+  - Room tickets no longer get stuck on your lanyard after being sold or
+    expiring. A worn ticket moves off your pins grid and shows how long
+    it has left; take it off to sell it.
 
 v1.5.0 (2026-10-31) - Shop editor, new seats, Shrinking Machine gate
 ---------------------------------------------------------------------

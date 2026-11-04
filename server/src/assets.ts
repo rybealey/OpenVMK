@@ -36,7 +36,7 @@ import {
   type AuthOutcome,
 } from "./auth.js";
 import { renderAuthPage, renderHome, serveSiteFile } from "./site.js";
-import { createTicket, databasePath, deleteSession, getUserByTicket, pruneExpired } from "./db.js";
+import { createTicket, databasePath, deleteSession, getOutfit, getUserByTicket, pruneExpired } from "./db.js";
 import { seasonalCasts } from "./seasons.js";
 import { currentSeason } from "./season-store.js";
 import { ARCHIVE, castExtracted, downloadFile } from "./paths.js";
@@ -1777,12 +1777,17 @@ function route(req: IncomingMessage, res: ServerResponse) {
         // this over the config's host/port, which cannot carry a scheme or path
         // — `wss://vmk.example.com/game` behind a proxy is unreachable from them.
         const { gameUrl } = publicUrls(req);
+        // The stored figure draws the tab icon (client/src/favicon.ts) from
+        // login on. None yet — a player still to make their avatar — no icon.
+        const figure = user.has_character ? getOutfit(user.id)?.figure ?? null : null;
         // ⚠ PREPENDED, not spliced into <head>: the built page has no <head>
         // tag, so a replace would silently inject nothing. A classic script
         // runs before the page's module scripts wherever it sits.
         // game-window.js keeps the website's Play Now pop-up at the stage's size.
         const html =
-          `<script>window.__VMK_GAME_URL = ${JSON.stringify(gameUrl).replace(/</g, "\\u003c")};</script>\n` +
+          `<script>window.__VMK_GAME_URL = ${JSON.stringify(gameUrl).replace(/</g, "\\u003c")};` +
+          (figure ? ` window.__VMK_FIGURE = ${JSON.stringify(figure)};` : "") +
+          `</script>\n` +
           `<script src="/site/game-window.js"></script>\n` +
           readFileSync(page, "utf8");
         res.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" });
