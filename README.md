@@ -80,6 +80,7 @@ These act directly on your local database (`data/vmk.db`), so only someone who c
 - `node tools/dev-account.mjs [name] [--new-user | --existing]` creates a password-less test account (default `devtest`) that can only log in with a minted ticket.
 - `node tools/mint-ticket.mjs [name] [--new-user | --existing]` issues a 10-minute login ticket for an existing account and prints a client URL that skips the login page. `--new-user` sends it through avatar creation again.
 - `node tools/set-admin.mjs <name>` grants staff permissions (`--revoke`, `--list`).
+- `VMK_DB=<throwaway.db> node tools/load-test.mjs --port <game port> --players 200` plays simulated players against a server started on that same throwaway database, and reports the lag they feel and the game server's CPU and memory. It creates accounts, so it refuses to touch `data/vmk.db`; the header of the script has the full steps.
 
 ### Re-extracting the game files
 
