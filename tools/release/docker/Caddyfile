@@ -11,3 +11,10 @@
 		reverse_proxy vmk:5199
 	}
 }
+
+# www.<domain> gets its own certificate and sends players to the bare domain.
+# ⚠ Needs a www A record too: without one its certificate can never be issued
+# and Caddy keeps retrying (the bare domain still works).
+www.{$VMK_DOMAIN} {
+	redir https://{$VMK_DOMAIN}{uri} permanent
+}
