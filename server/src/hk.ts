@@ -91,6 +91,7 @@ import {
 import { expandedWords, inRecoveredDictionary } from "./dictionary.js";
 import { currentSeason, isSeasonChoice, saveSeason, storedSeason, type SeasonChoice } from "./season-store.js";
 import { seasonFromEnv } from "./seasons.js";
+import { clockTime, isOpen, nextChange, parseSchedule, saveSchedule, schedule, storedSchedule } from "./operations.js";
 import { addWord, blockWord, dictionaryEntries, dictionaryEntry, unblockWord } from "./dictionary-store.js";
 import { isPairedTeleporter } from "./furni-footprint.js";
 import { avatarFor, iconFor, isFurniCode, roomIconFor, warmIcons } from "./hk-icons.js";
@@ -248,7 +249,22 @@ function userByName(name: string): User | undefined {
 
 const SEASON_LABEL: Record<SeasonChoice, string> = { none: "Everyday", xmas: "Christmas", halloween: "Halloween" };
 
-/** The season in force and where it comes from, for the Overview page. */
+/** The hours as saved (or the defaults), whether it is open now, and the next change. */
+function operationsStatus() {
+  const stored = storedSchedule();
+  const s = schedule();
+  const next = nextChange();
+  return {
+    schedule: s,
+    saved: stored !== null,
+    updatedAt: stored?.updatedAt ?? null,
+    staff: stored?.staffId ? namesFor([stored.staffId])[stored.staffId] ?? null : null,
+    open: isOpen(),
+    next: next ? { opens: next.opens, at: next.at, label: clockTime(next.at) } : null,
+  };
+}
+
+/** The season in force and where it comes from, for the Season page. */
 function seasonStatus() {
   const stored = storedSeason();
   const current: SeasonChoice = currentSeason() ?? "none";
@@ -470,11 +486,41 @@ async function api(req: IncomingMessage, me: User, path: string, url: URL): Prom
       chatToday: Number(
         (db.prepare("SELECT COUNT(*) n FROM chat_log WHERE created_at > ? AND kind = 'chat'").get(Date.now() - 86400e3) as Row).n,
       ),
-      season: seasonStatus(),
+    };
+  }
+
+  // ---- operating hours (operations.ts): both servers follow it live; the game
+  // server warns and removes players at closing time.
+  if (path === "operations" && method === "GET") {
+    return operationsStatus();
+  }
+
+  if (path === "operations" && method === "POST") {
+    need(me, "admin");
+    const parsed = parseSchedule(body);
+    if (typeof parsed === "string") throw new HkError(400, parsed);
+    saveSchedule(parsed, me.id);
+    log(
+      "operations",
+      null,
+      parsed.enabled ? `open ${parsed.open}, close ${parsed.close} (${parsed.timeZone})` : `hours off: always open (${parsed.open}-${parsed.close} ${parsed.timeZone} kept)`,
+    );
+    const status = operationsStatus();
+    return {
+      message: !parsed.enabled
+        ? "Operating hours are off: VMKT is always open."
+        : status.open
+          ? `Saved. VMKT is open now and closes at ${status.next?.label}.`
+          : `Saved. VMKT is closed now and opens at ${status.next?.label}; players still in the game are removed within 15 seconds.`,
+      ...status,
     };
   }
 
   // ---- park season (season-store.ts): overrides VMK_SEASON; both servers follow it live.
+  if (path === "season" && method === "GET") {
+    return { season: seasonStatus() };
+  }
+
   if (path === "season" && method === "POST") {
     need(me, "admin");
     if (!isSeasonChoice(body.season)) throw new HkError(400, "Pick Everyday, Christmas or Halloween.");

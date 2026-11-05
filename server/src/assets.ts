@@ -36,6 +36,7 @@ import {
   type AuthOutcome,
 } from "./auth.js";
 import { renderAuthPage, renderHome, serveSiteFile } from "./site.js";
+import { isOpen } from "./operations.js";
 import { createTicket, databasePath, deleteSession, getOutfit, getUserByTicket, pruneExpired } from "./db.js";
 import { seasonalCasts } from "./seasons.js";
 import { currentSeason } from "./season-store.js";
@@ -1746,6 +1747,11 @@ function route(req: IncomingMessage, res: ServerResponse) {
       send(res, 403, banned, "text/html; charset=utf-8");
       return;
     }
+    // Outside operating hours (operations.ts): the home page says when it opens.
+    if (!isOpen() && user.permissions.length === 0) {
+      redirect(res, "/");
+      return;
+    }
     guard(
       "play",
       async () => {
@@ -1846,6 +1852,10 @@ function route(req: IncomingMessage, res: ServerResponse) {
     const banned = banPage(clientUser);
     if (banned) {
       send(res, 403, banned, "text/html; charset=utf-8");
+      return;
+    }
+    if (!isOpen() && clientUser.permissions.length === 0) {
+      redirect(res, "/");
       return;
     }
     guard(

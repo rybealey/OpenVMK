@@ -47,6 +47,13 @@
 <!--/if:in-->
     </div>
     <div class="hero-play">
+<!--if:closed-->
+      <div class="play-disc closed" role="img" aria-label="VMKT is closed. It opens at {{opensAt}}.">
+        <span class="play">Closed</span>
+        <span class="game">Opens {{opensAt}}</span>
+      </div>
+<!--/if:closed-->
+<!--if:open-->
 <!--if:out-->
       <a class="play-disc" href="/register" aria-label="Play now: register for the free online game">
         <span class="play">Play<br>Now</span>
@@ -60,6 +67,7 @@
         <span class="game">Enter the Kingdom</span>
       </a>
 <!--/if:in-->
+<!--/if:open-->
       <p class="online-chip"><!--online--></p>
     </div>
   </div>

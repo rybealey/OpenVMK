@@ -52,6 +52,8 @@ const ICONS = {
   megaphone: "M13 2v12l-4-3H6l1 4H4.5l-1-4H2a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1h7z",
   dollar: "M7 1h2v1.6c1.5.2 2.8 1 3 2.6h-2c-.2-.6-.9-1-2-1-1.3 0-2 .5-2 1.2 0 .8.9 1 2.4 1.4 2 .5 3.6 1.1 3.6 3 0 1.5-1.2 2.5-3 2.7V14H7v-1.6c-1.8-.2-3.1-1.2-3.2-2.9h2c.2.8 1 1.2 2.2 1.2 1.3 0 2-.5 2-1.2 0-.9-.9-1.1-2.5-1.5C5.6 7.6 4.2 7 4.2 5.2c0-1.4 1.1-2.4 2.8-2.6z",
   door: "M3 1h9a1 1 0 0 1 1 1v13H3zm6 6.3a.8.8 0 1 0 0 1.6.8.8 0 0 0 0-1.6z",
+  clock: "M8 1a7 7 0 1 0 0 14A7 7 0 0 0 8 1zm0 1.6a5.4 5.4 0 1 1 0 10.8A5.4 5.4 0 0 1 8 2.6zM7.2 4h1.6v3.7l2.6 1.6-.8 1.3-3.4-2.1z",
+  star: "M8 1l2.1 4.6 5 .5-3.8 3.4 1.1 4.9L8 11.9l-4.4 2.5 1.1-4.9L.9 6.1l5-.5z",
   key: "M10.5 1a4.5 4.5 0 1 1-1.8 8.6L7.3 11H5.5v1.8H3.7v1.8H1v-2.7l5.4-5.4A4.5 4.5 0 0 1 10.5 1zm1 2.3a1.2 1.2 0 1 0 0 2.4 1.2 1.2 0 0 0 0-2.4z",
 };
 function icon(name) {
@@ -341,6 +343,8 @@ function buildSidebar() {
     h("div", { class: "head" }, "Server"),
     link("#/", "gauge", "Overview"),
     link("#/online", "users", "Online Users"),
+    link("#/operations", "clock", "Operations"),
+    link("#/season", "star", "Season"),
     link("/hk/logout", "logout", "Log Out"),
     h("div", { class: "head" }, "Tools"),
     link("#/bulk/ban", "fire", "Bulk Ban"),
@@ -383,6 +387,8 @@ function updateCfhBadge() {
 const routes = [
   [/^\/?$/, pageOverview],
   [/^\/online$/, pageOnline],
+  [/^\/operations$/, pageOperations],
+  [/^\/season$/, pageSeason],
   [/^\/users$/, pageUsers],
   [/^\/user\/(\d+)(?:\/(\w+))?$/, pageUser],
   [/^\/chatlogs$/, pageChatlogs],
@@ -487,13 +493,72 @@ async function pageOverview() {
     h("h2", { class: "section-title" }, "Alert Game"),
     alertText,
     h("div", { class: "flex", style: "justify-content:space-between;margin-top:6px" }, counter, send),
-    seasonPanel(s.season),
   );
+}
+
+/* --------------------------------------------------- operations, season */
+
+/** Server > Operations: daily opening and closing times (server: operations.ts). */
+async function pageOperations() {
+  const r = await api("operations");
+  const admin = state.me?.admin;
+  const s = r.schedule;
+  const browserZone = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+  const zones = typeof Intl.supportedValuesOf === "function" ? Intl.supportedValuesOf("timeZone") : [browserZone, "UTC"];
+  // Never saved: suggest this browser's zone rather than the server's UTC.
+  const zone = r.saved ? s.timeZone : browserZone;
+  const enabled = h("input", { type: "checkbox", id: "ops-enabled", checked: s.enabled, disabled: !admin });
+  const open = h("input", { type: "time", id: "ops-open", value: s.open, required: true, disabled: !admin });
+  const close = h("input", { type: "time", id: "ops-close", value: s.close, required: true, disabled: !admin });
+  const tz = h("select", { id: "ops-zone", disabled: !admin },
+    [...new Set([zone, ...zones])].map((z) => h("option", { value: z, selected: z === zone }, z.replace(/_/g, " "))));
+  const save = h("button", { class: "btn btn-primary", type: "submit", disabled: !admin }, "Save");
+
+  const status = !s.enabled
+    ? h("div", { class: "alert alert-success" }, h("strong", {}, "Always open."), " Operating hours are off.")
+    : r.open
+      ? h("div", { class: "alert alert-success" }, h("strong", {}, "Open now."), ` Closes at ${r.next?.label ?? "?"}.`)
+      : h("div", { class: "alert alert-warning" }, h("strong", {}, "Closed now."), ` Opens at ${r.next?.label ?? "?"}.`);
+
+  const submit = async (e) => {
+    e.preventDefault();
+    const body = { enabled: enabled.checked, open: open.value, close: close.value, timeZone: tz.value };
+    if (body.enabled && !(await modal("Save operating hours?", {
+      text: `VMKT will open at ${body.open} and close at ${body.close} (${body.timeZone}) every day. If that makes it closed right now, everyone who isn't staff is removed within 15 seconds.`,
+      confirm: "Save",
+    }))) return;
+    if (await act("operations", body, save)) route();
+  };
+
+  return h("div", {},
+    pageHeader("Operations"),
+    status,
+    h("form", { class: "panel", onsubmit: submit },
+      h("div", { class: "panel-heading" }, h("strong", {}, "Operating hours")),
+      h("div", { class: "panel-body" },
+        h("label", { class: "flex mb", for: "ops-enabled", style: "cursor:pointer" }, enabled, "Open and close VMKT on a daily schedule"),
+        h("div", { class: "flex mb" },
+          h("div", {}, h("label", { for: "ops-open" }, "Opens at"), h("br"), open),
+          h("div", {}, h("label", { for: "ops-close" }, "Closes at"), h("br"), close),
+          h("div", {}, h("label", { for: "ops-zone" }, "Time zone"), h("br"), tz)),
+        h("p", { class: "muted small" },
+          "A closing time earlier than the opening time runs overnight (e.g. open 18:00, close 02:00). ",
+          "While closed, players can't enter and the website says when VMKT opens; staff can still play. ",
+          "Everyone online gets a warning 10 minutes and 1 minute before closing; at closing time, everyone who isn't staff is disconnected."),
+        h("div", { class: "flex" }, save),
+        admin ? null : h("p", { class: "muted small" }, "Changing the hours needs full admin permissions."),
+        r.saved ? h("p", { class: "muted small" }, `Last saved ${fmtTime(r.updatedAt)}${r.staff ? ` by ${r.staff.name}` : ""}.`) : null)));
+}
+
+/** Server > Season: the park's decorations and music. */
+async function pageSeason() {
+  const r = await api("season");
+  return h("div", {}, pageHeader("Season"), seasonPanel(r.season));
 }
 
 const SEASONS = [["none", "Everyday"], ["xmas", "Christmas"], ["halloween", "Halloween"]];
 
-/** Overview > Park season (server: season-store.ts). */
+/** Server > Season (server: season-store.ts). */
 function seasonPanel(season) {
   const admin = state.me?.admin;
   const label = (v) => SEASONS.find(([k]) => k === v)?.[1] ?? v;
@@ -520,8 +585,7 @@ function seasonPanel(season) {
     }
   });
   return h("div", {},
-    h("h2", { class: "section-title" }, "Park season"),
-    h("p", {}, "Decorations and music for the park's main rooms."),
+    h("p", {}, "The park season sets the decorations and music in the park's main rooms."),
     h("div", { class: "flex" }, choice, save),
     note,
     admin ? null : h("p", { class: "muted small" }, "Changing the season needs full admin permissions."));

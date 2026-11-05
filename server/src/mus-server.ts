@@ -186,6 +186,7 @@ import {
 } from "./haunted-mansion.js";
 import { deHoliday, seasonCastKey, seasonalCasts } from "./seasons.js";
 import { currentSeason } from "./season-store.js";
+import { clockTime, isOpen, nextChange } from "./operations.js";
 import { ARCHIVE, OVERLAY, castExtracted, downloadFile } from "./paths.js";
 import { clientIp, remoteLabel } from "./client-ip.js";
 import { createPhotoSession, issuePhotoToken } from "./photo-server.js";
@@ -1123,6 +1124,51 @@ function completeTrade(t: Trade): void {
   for (const userId of t.users) liveByUser.get(userId)?.refreshInventory();
 }
 const liveByUser = new Map<number, LiveConnection>();
+
+/** Staff (any moderator permission) can play while the game is closed. */
+const isStaffId = (userId: number) => (getUserById(userId)?.permissions.length ?? 0) > 0;
+
+/** "VMKT is closed. We open again at 8:00 AM EST." */
+function closedNotice(): string {
+  const reopen = nextChange();
+  return reopen?.opens ? `VMKT is closed. We open again at ${clockTime(reopen.at)}.` : "VMKT is closed.";
+}
+
+/** Warnings already sent, keyed by closing moment and how far ahead. */
+const closingWarned = new Set<string>();
+
+/**
+ * Operating hours (operations.ts, set in /hk > Operations). Ten minutes and one
+ * minute before closing, everyone gets an alert; once closed, every player who
+ * isn't staff is told when it reopens and disconnected. New logins are refused
+ * at LOGIN while it stays closed.
+ */
+function followOperations(): void {
+  const change = nextChange();
+  if (change && !change.opens) {
+    const left = change.at - Date.now();
+    for (const ahead of [10 * 60_000, 60_000]) {
+      const key = `${change.at}:${ahead}`;
+      if (left > ahead || closingWarned.has(key)) continue;
+      closingWarned.add(key);
+      const minutes = Math.max(1, Math.ceil(left / 60_000));
+      const text = wireText(
+        `VMKT closes in ${minutes} minute${minutes === 1 ? "" : "s"}, at ${clockTime(change.at)}. Find a good place to stop!`,
+      );
+      for (const c of liveByUser.values()) c.send(MSG.ADMIN_MESSAGE, [{ str: text }, { int: 3 }], "AdminMessage (closing soon)");
+    }
+  }
+  if (isOpen()) return;
+  const text = wireText(closedNotice());
+  for (const c of [...liveByUser.values()]) {
+    if (isStaffId(c.userId)) continue;
+    c.send(MSG.ADMIN_MESSAGE, [{ str: text }, { int: 3 }], "AdminMessage (closed)");
+    // Give the alert a moment to leave before the socket goes.
+    setTimeout(() => c.disconnect("closed for the day"), 250);
+  }
+}
+setInterval(followOperations, 15_000).unref();
+
 // The music stages hand the performer to their connection (music-mixer.ts).
 for (const stage of [MONORAIL_MIXER_STAGE, STREET_MIXER_STAGE]) {
   setStageHook(stage, (_room, userId) => liveByUser.get(userId)?.onMusicStage());
@@ -6776,6 +6822,15 @@ function createVmkSession(
       if (ban) {
         console.log(`[${label}] login REFUSED: "${account.username}" is banned (#${ban.id})`);
         onClose("banned");
+        return;
+      }
+
+      // Outside operating hours (operations.ts). The website already sends
+      // players home with the opening time; this covers a game already loaded.
+      if (!isOpen() && !(account.permissions.length > 0)) {
+        console.log(`[${label}] login REFUSED: "${account.username}" — closed`);
+        send(MSG.ADMIN_MESSAGE, [{ str: wireText(closedNotice()) }, { int: 3 }], "AdminMessage (closed)");
+        setTimeout(() => onClose("closed"), 250);
         return;
       }
 

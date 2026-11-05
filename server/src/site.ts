@@ -8,6 +8,7 @@
  *   <!--key-->         a fragment built here (already escaped)
  *   <!--if:in-->…<!--/if:in-->, <!--if:out-->…<!--/if:out-->
  *                      kept for a signed-in / signed-out visitor, dropped otherwise
+ *   <!--if:open-->…, <!--if:closed-->…  the same for operating hours (operations.ts)
  *
  * The routes and the form handlers (rate limits, sessions) stay in assets.ts
  * with the rest of sign-in; this file only renders.
@@ -25,6 +26,7 @@ import {
   type User,
 } from "./db.js";
 import { onlinePlayerIds } from "./hk.js";
+import { clockTime, isOpen, nextChange } from "./operations.js";
 import { ROOT } from "./paths.js";
 
 const SITE = join(ROOT, "server", "public", "site");
@@ -43,15 +45,17 @@ function escapeHtml(s: string): string {
 
 function fill(
   template: string,
-  signedIn: boolean,
+  flags: Record<string, boolean>,
   text: Record<string, string>,
   html: Record<string, string> = {},
 ): string {
-  const keep = signedIn ? "in" : "out";
-  const drop = signedIn ? "out" : "in";
-  return template
-    .replace(new RegExp(`<!--if:${drop}-->[\\s\\S]*?<!--/if:${drop}-->\\n?`, "g"), "")
-    .replace(new RegExp(`<!--/?if:${keep}-->\\n?`, "g"), "")
+  let out = template;
+  for (const [flag, on] of Object.entries(flags)) {
+    out = on
+      ? out.replace(new RegExp(`<!--/?if:${flag}-->\\n?`, "g"), "")
+      : out.replace(new RegExp(`<!--if:${flag}-->[\\s\\S]*?<!--/if:${flag}-->\\n?`, "g"), "");
+  }
+  return out
     .replace(/<!--(\w+)-->/g, (_, key: string) => html[key] ?? "")
     .replace(/\{\{(\w+)\}\}/g, (_, key: string) => escapeHtml(text[key] ?? ""));
 }
@@ -107,8 +111,14 @@ function featuredRooms(): string {
 
 export async function renderHome(user: User | undefined): Promise<string> {
   const online = await onlinePlayerIds();
-  const html: Record<string, string> = { online: onlineLine(online), featured: featuredRooms() };
-  const text: Record<string, string> = {};
+  const open = isOpen();
+  const reopen = open ? null : nextChange();
+  const html: Record<string, string> = {
+    online: open ? onlineLine(online) : "VMKT is closed right now",
+    featured: featuredRooms(),
+  };
+  // Outside operating hours (operations.ts) the Play disc says when it opens.
+  const text: Record<string, string> = { opensAt: reopen?.opens ? clockTime(reopen.at) : "later" };
 
   if (user) {
     const name = shownName(user);
@@ -133,7 +143,8 @@ export async function renderHome(user: User | undefined): Promise<string> {
     html.staffLink = user.permissions.length > 0 ? `          <a class="staff" href="/hk">Housekeeping</a>\n` : "";
     html.mainClass = "signed-in";
   }
-  return fill(template("home.html"), user !== undefined, text, html);
+  const signedIn = user !== undefined;
+  return fill(template("home.html"), { in: signedIn, out: !signedIn, open, closed: !open }, text, html);
 }
 
 const ALERT_ICON =
@@ -151,7 +162,7 @@ export function renderAuthPage(
   const { error, next, username = "" } = options;
   return fill(
     template(`${page}.html`),
-    false,
+    { in: false, out: true },
     { username },
     {
       error: error ? `    <div class="alert" role="alert">${ALERT_ICON}<p>${escapeHtml(error)}</p></div>` : "",

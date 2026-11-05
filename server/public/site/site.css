@@ -100,6 +100,11 @@ h1, h2, h3 { font-family: var(--display); }
 .play-disc .play { font: 700 34px/0.95 var(--display); color: #FFFFFF; text-align: center; text-shadow: 0 2px 0 #1F5A08; }
 .play-disc .free { margin-top: 4px; padding: 0 8px; border-radius: 6px; font: 700 17px/1.4 var(--display); color: #C2410C; background: #FFF7D6; }
 .play-disc .game { font: 600 14px/1.4 var(--display); color: var(--ink); }
+/* Outside operating hours: the same disc, dimmed, saying when it opens. */
+.play-disc.closed { background: radial-gradient(circle at 50% 35%, #9AA8C7 0%, #6B7A9E 45%, #44507A 100%); cursor: default; }
+.play-disc.closed:hover { filter: none; }
+.play-disc.closed .play { text-shadow: 0 2px 0 #2B3456; }
+.play-disc.closed .game { margin-top: 6px; padding: 0 12px; text-align: center; color: #FFFFFF; font-size: 13px; }
 .online-chip { margin: 0; padding: 6px 12px; border-radius: 999px; font-size: 13px; background: rgba(7, 22, 69, 0.6); }
 
 /* ---- section strip ---- */
